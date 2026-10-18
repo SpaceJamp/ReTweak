@@ -30,6 +30,8 @@ internal sealed partial class TrayIcon : IDisposable
     private readonly WndProcDelegate _wndProc;
     private readonly nint _hwnd;
     private nint _icon;
+    // ReTweak's own tray icons (Assets/tray*.ico); 0 falls back to the stock Windows icons.
+    private readonly nint _iconNormal, _iconWarning, _iconCritical;
     private string _tip = "ReTweak";
     private bool _added, _disposed;
 
@@ -50,19 +52,31 @@ internal sealed partial class TrayIcon : IDisposable
         // A real (never shown) top-level window, not HWND_MESSAGE: message-only windows
         // don't receive the TaskbarCreated broadcast, and the icon would vanish after an Explorer restart.
         _hwnd = CreateWindowEx(0, WindowClass, "ReTweak", 0, 0, 0, 0, 0, 0, 0, wc.hInstance, 0);
-        _icon = LoadIcon(0, IdiApplication);
+        _iconNormal = LoadTrayIcon("tray.ico");
+        _iconWarning = LoadTrayIcon("tray-warning.ico");
+        _iconCritical = LoadTrayIcon("tray-critical.ico");
+        _icon = _iconNormal != 0 ? _iconNormal : LoadIcon(0, IdiApplication);
         Add();
+    }
+
+    /// <summary>Loads an .ico from Assets at the notification area's size (which depends on DPI).</summary>
+    private static nint LoadTrayIcon(string file)
+    {
+        string path = Path.Combine(AppContext.BaseDirectory, "Assets", file);
+        if (!File.Exists(path)) return 0;
+        int size = GetSystemMetrics(SmCxSmIcon);
+        return LoadImage(0, path, ImageIcon, size, size, LrLoadFromFile);
     }
 
     /// <summary>Updates the icon and tooltip to reflect the worst active alert.</summary>
     public void SetStatus(AlertSeverity worst, string tooltip)
     {
-        _icon = LoadIcon(0, worst switch
+        _icon = worst switch
         {
-            AlertSeverity.Critical => IdiError,
-            AlertSeverity.Warning => IdiWarning,
-            _ => IdiApplication,
-        });
+            AlertSeverity.Critical => _iconCritical != 0 ? _iconCritical : LoadIcon(0, IdiError),
+            AlertSeverity.Warning => _iconWarning != 0 ? _iconWarning : LoadIcon(0, IdiWarning),
+            _ => _iconNormal != 0 ? _iconNormal : LoadIcon(0, IdiApplication),
+        };
         _tip = tooltip.Length > 127 ? tooltip[..127] : tooltip;
         Notify(NimModify);
     }
@@ -138,6 +152,8 @@ internal sealed partial class TrayIcon : IDisposable
         if (_added) Notify(NimDelete);
         _disposed = true;
         DestroyWindow(_hwnd);
+        foreach (var icon in new[] { _iconNormal, _iconWarning, _iconCritical })
+            if (icon != 0) DestroyIcon(icon); // LoadImage(LR_LOADFROMFILE) icons are ours to free
     }
 
     // ---- Win32 ----
@@ -187,6 +203,12 @@ internal sealed partial class TrayIcon : IDisposable
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern nint FindWindow(string cls, string? name);
     [DllImport("user32.dll")] private static extern bool PostMessage(nint hwnd, uint msg, nint wParam, nint lParam);
     [DllImport("user32.dll")] private static extern nint LoadIcon(nint instance, nint name);
+    private const uint ImageIcon = 1, LrLoadFromFile = 0x10;
+    private const int SmCxSmIcon = 49;
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern nint LoadImage(nint instance, string name, uint type, int cx, int cy, uint flags);
+    [DllImport("user32.dll")] private static extern bool DestroyIcon(nint icon);
+    [DllImport("user32.dll")] private static extern int GetSystemMetrics(int index);
     [DllImport("user32.dll")] private static extern nint CreatePopupMenu();
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern bool AppendMenu(nint menu, uint flags, nint id, string? text);
     [DllImport("user32.dll")] private static extern bool DestroyMenu(nint menu);

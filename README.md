@@ -1,3 +1,5 @@
+<img src="docs/icon.png" alt="" width="96" align="right">
+
 # ReTweak
 
 A lightweight successor to ASUS GPU Tweak III for NVIDIA cards, focused first on

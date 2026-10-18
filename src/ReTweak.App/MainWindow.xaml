@@ -18,6 +18,7 @@
         <!-- Custom title bar -->
         <Grid x:Name="TitleBar" Height="40" Padding="16,0,140,0">
             <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+                <Image Source="ms-appx:///Assets/ReTweak.ico" Width="18" Height="18" />
                 <TextBlock Text="ReTweak" FontWeight="SemiBold" />
                 <TextBlock Text="{x:Bind ViewModel.GpuName}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
             </StackPanel>

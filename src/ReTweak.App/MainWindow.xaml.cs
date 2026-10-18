@@ -27,6 +27,7 @@ public sealed partial class MainWindow : Window
 
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(TitleBar);
+        AppWindow.SetIcon(System.IO.Path.Combine(AppContext.BaseDirectory, "Assets", "ReTweak.ico")); // title bar, taskbar, Alt+Tab
         // Resize takes physical pixels; scale so the layout gets the same room at 125-200% display scaling.
         double scale = GetDpiForWindow(WinRT.Interop.WindowNative.GetWindowHandle(this)) / 96.0;
         AppWindow.Resize(new SizeInt32((int)(1180 * scale), (int)(900 * scale)));
