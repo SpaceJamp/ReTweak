@@ -8,6 +8,9 @@ namespace ReTweak.App;
 internal static class Notifications
 {
     private static bool _registered;
+
+    /// <summary>User setting; in-app alerts are shown either way.</summary>
+    public static bool Enabled { get; set; } = true;
     private static readonly Dictionary<string, DateTime> _lastShown = [];
     private static readonly TimeSpan Cooldown = TimeSpan.FromSeconds(30);
 
@@ -29,10 +32,18 @@ internal static class Notifications
         if (_registered) AppNotificationManager.Default.Unregister();
     }
 
+    /// <summary>A plain informational toast (e.g. "still running in the tray").</summary>
+    public static void ShowInfo(string title, string text)
+    {
+        if (!Enabled || !_registered) return;
+        try { AppNotificationManager.Default.Show(new AppNotificationBuilder().AddText(title).AddText(text).BuildNotification()); }
+        catch { }
+    }
+
     /// <summary>Shows a toast for warnings and criticals, at most once per alert per cooldown.</summary>
     public static void Show(Alert a)
     {
-        if (!_registered || a.Severity < AlertSeverity.Warning) return;
+        if (!Enabled || !_registered || a.Severity < AlertSeverity.Warning) return;
         string key = $"{a.Key}:{a.Severity}";
         if (_lastShown.TryGetValue(key, out var last) && DateTime.Now - last < Cooldown) return;
         _lastShown[key] = DateTime.Now;

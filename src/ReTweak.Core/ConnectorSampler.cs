@@ -23,7 +23,7 @@ public sealed class ConnectorSampler : IDisposable
     private readonly double _smoothing;
     private readonly Thread _thread;
     private readonly CancellationTokenSource _cts = new();
-    private readonly CsvLogger? _log;
+    private CsvLogger? _log;
     private readonly Stopwatch _clock = Stopwatch.StartNew();
 
     private ConnectorReading? _lastRaw;
@@ -31,6 +31,12 @@ public sealed class ConnectorSampler : IDisposable
     private readonly double?[] _emaVolts = new double?[6], _emaAmps = new double?[6];
 
     public AlertEngine Alerts { get; }
+
+    /// <summary>Starts or stops CSV logging at runtime. The previous logger is closed.</summary>
+    public void SetLog(CsvLogger? log) => Interlocked.Exchange(ref _log, log)?.Dispose();
+
+    /// <summary>File currently being logged to, or null.</summary>
+    public string? LogPath => Volatile.Read(ref _log)?.Path;
 
     /// <summary>Raised on the sampler thread for every new frame.</summary>
     public event Action<ConnectorFrame>? FrameReceived;
@@ -93,7 +99,7 @@ public sealed class ConnectorSampler : IDisposable
         _lastChange = uptime;
         var frame = new ConnectorFrame(DateTime.Now, uptime, raw, Smooth(raw));
         Alerts.Process(frame);
-        _log?.Write(frame);
+        Volatile.Read(ref _log)?.Write(frame);
         FrameReceived?.Invoke(frame);
     }
 
@@ -121,6 +127,6 @@ public sealed class ConnectorSampler : IDisposable
         if (_thread.IsAlive && !_thread.Join(TimeSpan.FromSeconds(2)))
             return; // still inside a driver call; let the background thread finish on its own
         _cts.Dispose();
-        _log?.Dispose();
+        SetLog(null);
     }
 }

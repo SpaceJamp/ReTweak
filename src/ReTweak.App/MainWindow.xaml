@@ -33,14 +33,19 @@
                         <TextBlock Text="{x:Bind ViewModel.Subtitle}" Style="{StaticResource CaptionTextBlockStyle}"
                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}" Margin="0,2,0,0" />
                     </StackPanel>
-                    <Border HorizontalAlignment="Right" VerticalAlignment="Center" CornerRadius="14" Padding="14,6"
-                            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                            BorderBrush="{x:Bind ViewModel.StatusBrush, Mode=OneWay}" BorderThickness="1">
-                        <StackPanel Orientation="Horizontal" Spacing="8">
-                            <Ellipse Width="10" Height="10" Fill="{x:Bind ViewModel.StatusBrush, Mode=OneWay}" />
-                            <TextBlock Text="{x:Bind ViewModel.Status, Mode=OneWay}" />
-                        </StackPanel>
-                    </Border>
+                    <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right" VerticalAlignment="Center">
+                        <Border CornerRadius="14" Padding="14,6"
+                                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                BorderBrush="{x:Bind ViewModel.StatusBrush, Mode=OneWay}" BorderThickness="1">
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <Ellipse Width="10" Height="10" Fill="{x:Bind ViewModel.StatusBrush, Mode=OneWay}" />
+                                <TextBlock Text="{x:Bind ViewModel.Status, Mode=OneWay}" />
+                            </StackPanel>
+                        </Border>
+                        <Button Click="Settings_Click" ToolTipService.ToolTip="Settings" Padding="8">
+                            <SymbolIcon Symbol="Setting" />
+                        </Button>
+                    </StackPanel>
                 </Grid>
 
                 <!-- Active alerts -->

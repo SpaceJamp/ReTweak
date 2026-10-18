@@ -1,7 +1,10 @@
+using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Shapes;
+using ReTweak.App.Native;
+using ReTweak.Core;
 using Windows.Foundation;
 using Windows.Graphics;
 
@@ -9,6 +12,12 @@ namespace ReTweak.App;
 
 public sealed partial class MainWindow : Window
 {
+    private readonly TrayIcon _tray = new();
+    private bool _exiting, _toldAboutTray;
+    private AlertSeverity _traySeverity = (AlertSeverity)(-1);
+    private string _trayText = "";
+    private DateTime _trayUpdated;
+
     public MainViewModel ViewModel { get; }
 
     public MainWindow(MainViewModel viewModel)
@@ -22,7 +31,17 @@ public sealed partial class MainWindow : Window
 
         ViewModel.HistoryChanged += RedrawCharts;
         ViewModel.AlertRaised += Notifications.Show;
-        Closed += (_, _) => ViewModel.Dispose();
+        ViewModel.StatusChanged += UpdateTray;
+        UpdateTray();
+
+        _tray.OpenRequested += ShowFromTray;
+        _tray.ExitRequested += ExitApp;
+        AppWindow.Closing += OnClosing;
+        Closed += (_, _) =>
+        {
+            ViewModel.Dispose();
+            _tray.Dispose();
+        };
     }
 
     public static Visibility Not(bool value) => value ? Visibility.Collapsed : Visibility.Visible;
@@ -41,10 +60,56 @@ public sealed partial class MainWindow : Window
         return w;
     }
 
+    public void ShowFromTray()
+    {
+        AppWindow.Show();
+        if (AppWindow.Presenter is OverlappedPresenter { State: OverlappedPresenterState.Minimized } p) p.Restore();
+        Activate();
+    }
+
+    private void ExitApp()
+    {
+        _exiting = true;
+        Close();
+    }
+
+    private void OnClosing(AppWindow sender, AppWindowClosingEventArgs args)
+    {
+        if (_exiting || !ViewModel.Settings.CloseToTray) return;
+        // Closing the window shouldn't stop protecting the connector: hide to the tray instead.
+        args.Cancel = true;
+        AppWindow.Hide();
+        if (!_toldAboutTray)
+        {
+            _toldAboutTray = true;
+            Notifications.ShowInfo("ReTweak is still monitoring",
+                "It's in the notification area. Right-click the icon and choose Exit to stop.");
+        }
+    }
+
+    private void UpdateTray()
+    {
+        // Severity changes go through immediately; tooltip-only changes at most every 2 s.
+        var sev = ViewModel.WorstSeverity;
+        string text = ViewModel.TrayText;
+        if (sev == _traySeverity && (text == _trayText || DateTime.Now - _trayUpdated < TimeSpan.FromSeconds(2))) return;
+        _traySeverity = sev;
+        _trayText = text;
+        _trayUpdated = DateTime.Now;
+        _tray.SetStatus(sev, text);
+    }
+
+    private async void Settings_Click(object sender, RoutedEventArgs e)
+    {
+        var saved = await SettingsDialog.ShowAsync(Content.XamlRoot, ViewModel.Settings, ViewModel.LogPath);
+        if (saved is not null) ViewModel.Apply(saved);
+    }
+
     private void Chart_SizeChanged(object sender, SizeChangedEventArgs e) => RedrawCharts();
 
     private void RedrawCharts()
     {
+        if (!AppWindow.IsVisible) return; // nothing to draw while hidden in the tray
         var o = ViewModel.AlertOptions;
         double peak = ViewModel.PowerHistory.Count > 0 ? ViewModel.PowerHistory.Max() : 0;
         Draw(PowerChart, ViewModel.PowerHistory, 0, Math.Max(50, peak * 1.2), []);
