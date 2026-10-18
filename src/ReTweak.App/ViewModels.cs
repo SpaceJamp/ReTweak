@@ -64,10 +64,19 @@ public sealed partial class MainViewModel : Observable, IDisposable
     private string _connAmps = "-", _connWatts = "-", _spread = "-", _imbalance = "-", _status = "All clear";
     private SolidColorBrush _statusBrush = Theme.Ok;
 
+    private AppSettings _settings;
+    private AlertSeverity _worst;
+
     public string GpuName { get; }
     public string Subtitle { get; }
     public bool HasConnector => _sampler is not null;
-    public AlertOptions AlertOptions => _sampler?.Alerts.Options ?? new AlertOptions();
+    public AlertOptions AlertOptions => _settings.Alerts;
+    public AppSettings Settings => _settings;
+    public AlertSeverity WorstSeverity => _worst;
+    /// <summary>Short status line for the tray tooltip.</summary>
+    public string TrayText => $"ReTweak · {Status}" + (HasConnector && ConnectorWatts != "-" ? $" · connector {ConnectorWatts}" : "");
+    /// <summary>Raised on the UI thread when the worst alert or the connector reading changes.</summary>
+    public event Action? StatusChanged;
 
     public string Temperature { get => _temp; private set => Set(ref _temp, value); }
     public string CoreClock { get => _core; private set => Set(ref _core, value); }
@@ -97,9 +106,10 @@ public sealed partial class MainViewModel : Observable, IDisposable
     /// <summary>Raised on the UI thread when an alert appears or escalates.</summary>
     public event Action<Alert>? AlertRaised;
 
-    public MainViewModel(GpuMonitor monitor)
+    public MainViewModel(GpuMonitor monitor, AppSettings settings)
     {
         _monitor = monitor;
+        _settings = settings;
         var gpu = monitor.Gpus.FirstOrDefault(g => monitor.HasConnectorSensor(g.Index)) ?? monitor.Gpus.FirstOrDefault()
                   ?? throw new InvalidOperationException("No NVIDIA GPU found.");
         _gpu = gpu.Index;
@@ -109,19 +119,39 @@ public sealed partial class MainViewModel : Observable, IDisposable
 
         if (monitor.HasConnectorSensor(_gpu))
         {
-            _sampler = new ConnectorSampler(monitor, _gpu);
+            _sampler = new ConnectorSampler(monitor, _gpu, new AlertEngine(settings.Alerts));
             _sampler.FrameReceived += f => _ui.TryEnqueue(() => OnFrame(f));
             _sampler.Alerts.Raised += a => _ui.TryEnqueue(() => OnAlert(a));
             _sampler.Alerts.Cleared += k => _ui.TryEnqueue(() => OnCleared(k));
             _sampler.Start();
         }
 
+        Apply(settings);
         _timer = _ui.CreateTimer();
         _timer.Interval = TimeSpan.FromSeconds(1);
         _timer.Tick += (_, _) => PollGpu();
         _timer.Start();
         PollGpu();
     }
+
+    /// <summary>Applies settings live: thresholds from the next frame, logging on/off, toasts.</summary>
+    public void Apply(AppSettings settings)
+    {
+        _settings = settings;
+        Notifications.Enabled = settings.Toasts;
+        if (_sampler is null) return;
+        _sampler.Alerts.Options = settings.Alerts;
+        bool logging = _sampler.LogPath is not null;
+        if (settings.LogConnector && (!logging || !_sampler.LogPath!.StartsWith(settings.LogFolder, StringComparison.OrdinalIgnoreCase)))
+        {
+            try { _sampler.SetLog(CsvLogger.Daily(settings.LogFolder)); }
+            catch (Exception) { _sampler.SetLog(null); } // bad folder: keep monitoring without logging
+        }
+        else if (!settings.LogConnector && logging)
+            _sampler.SetLog(null);
+    }
+
+    public string? LogPath => _sampler?.LogPath;
 
     private void PollGpu()
     {
@@ -153,6 +183,7 @@ public sealed partial class MainViewModel : Observable, IDisposable
         ConnectorWatts = $"{r.TotalWatts:F0} W";
         Spread = valid.Count >= 2 ? $"{(valid.Max(p => p.Volts) - valid.Min(p => p.Volts)) * 1000:F0} mV" : "-";
         Imbalance = $"x{r.Imbalance:F2}";
+        StatusChanged?.Invoke();
 
         // A frame with no valid pins would chart as 0 V / 0 W; leave a gap-free history instead.
         if (f.Raw.Pins.Any(p => p.Valid))
@@ -191,6 +222,8 @@ public sealed partial class MainViewModel : Observable, IDisposable
         var worst = _sampler?.Alerts.Active.FirstOrDefault();
         Status = worst is null ? "All clear" : $"{worst.Severity}: {worst.Title}";
         StatusBrush = Theme.For(worst?.Severity ?? AlertSeverity.None);
+        _worst = worst?.Severity ?? AlertSeverity.None;
+        StatusChanged?.Invoke();
     }
 
     public void Dispose()

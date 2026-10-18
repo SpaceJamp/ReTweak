@@ -80,14 +80,21 @@ public sealed class AlertEngine
     private readonly object _lock = new();
     private int _readFailures;
 
-    public AlertOptions Options { get; }
+    private AlertOptions _options;
+
+    /// <summary>Thresholds; can be replaced at runtime (takes effect from the next frame).</summary>
+    public AlertOptions Options
+    {
+        get { lock (_lock) return _options; }
+        set { lock (_lock) _options = value ?? throw new ArgumentNullException(nameof(value)); }
+    }
 
     /// <summary>Raised when an alert appears or changes severity.</summary>
     public event Action<Alert>? Raised;
     /// <summary>Raised with the key of an alert that has cleared.</summary>
     public event Action<string>? Cleared;
 
-    public AlertEngine(AlertOptions? options = null) => Options = options ?? new AlertOptions();
+    public AlertEngine(AlertOptions? options = null) => _options = options ?? new AlertOptions();
 
     public IReadOnlyList<Alert> Active
     {

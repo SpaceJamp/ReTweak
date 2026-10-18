@@ -8,6 +8,9 @@ going wrong.
 - **Per-pin voltage and current** on ASUS cards with Power Detector+ (e.g. ROG Astral), read directly from the card's monitor chip; see [docs/power-detector.md](docs/power-detector.md)
 - Early-warning alerts: pin over-current, low/high voltage, pin-to-pin voltage spread, current imbalance, fast voltage drops or current ramps, frozen sensor
 - Native Windows notifications for alerts
+- Runs in the notification area: closing the window keeps monitoring; the tray icon shows the worst active alert
+- Optional start with Windows (`--minimized`, tray only), CSV logging and adjustable thresholds in Settings
+  (stored in `%LocalAppData%\ReTweak\settings.json`)
 
 Read-only: ReTweak never writes to the GPU.
 
