@@ -47,6 +47,13 @@ public sealed partial class PinViewModel(int pin) : Observable
     }
 }
 
+public sealed partial class BoardTempViewModel(string name) : Observable
+{
+    private string _value = "-";
+    public string Name { get; } = name;
+    public string Value { get => _value; set => Set(ref _value, value); }
+}
+
 public sealed record AlertViewModel(string Key, string Title, string Detail, InfoBarSeverity Severity);
 
 public sealed partial class MainViewModel : Observable, IDisposable
@@ -55,6 +62,7 @@ public sealed partial class MainViewModel : Observable, IDisposable
 
     private readonly GpuMonitor _monitor;
     private readonly ConnectorSampler? _sampler;
+    private readonly AlertEngine _alerts; // shared: connector frames (sampler thread) + GPU temps (UI thread)
     private readonly DispatcherQueueTimer _timer;
     private readonly DispatcherQueue _ui = DispatcherQueue.GetForCurrentThread();
     private readonly int _gpu;
@@ -78,7 +86,15 @@ public sealed partial class MainViewModel : Observable, IDisposable
     /// <summary>Raised on the UI thread when the worst alert or the connector reading changes.</summary>
     public event Action? StatusChanged;
 
+    private string _memTemp = "-", _memSource = "";
+    public bool HasMemoryTemp { get; }
     public string Temperature { get => _temp; private set => Set(ref _temp, value); }
+    public string MemoryTemperature { get => _memTemp; private set => Set(ref _memTemp, value); }
+    /// <summary>Where the memory temperature comes from (shown under the value).</summary>
+    public string MemoryTempSource { get => _memSource; private set => Set(ref _memSource, value); }
+    /// <summary>ASUS board sensors (register 0x60); empty on cards without the ASUS chip.</summary>
+    public ObservableCollection<BoardTempViewModel> BoardTemps { get; } = [];
+    public bool HasBoardTemps => HasConnector;
     public string CoreClock { get => _core; private set => Set(ref _core, value); }
     public string MemoryClock { get => _mem; private set => Set(ref _mem, value); }
     public string Load { get => _load; private set => Set(ref _load, value); }
@@ -117,12 +133,17 @@ public sealed partial class MainViewModel : Observable, IDisposable
         Subtitle = $"Driver {monitor.DriverVersion}  ·  PCI bus {gpu.PciBus}  ·  subsystem {gpu.SubVendorId:X4}:{gpu.SubDeviceId:X4}"
                    + (monitor.HasConnectorSensor(_gpu) ? "  ·  ASUS Power Detector found" : "");
 
+        HasMemoryTemp = monitor.HasMemoryTemperature(_gpu);
+
+        _alerts = new AlertEngine(settings.Alerts);
+        // Raised on the sampler thread or the UI thread; always marshal so handlers run on the UI thread.
+        _alerts.Raised += a => _ui.TryEnqueue(() => OnAlert(a));
+        _alerts.Cleared += k => _ui.TryEnqueue(() => OnCleared(k));
+
         if (monitor.HasConnectorSensor(_gpu))
         {
-            _sampler = new ConnectorSampler(monitor, _gpu, new AlertEngine(settings.Alerts));
+            _sampler = new ConnectorSampler(monitor, _gpu, _alerts);
             _sampler.FrameReceived += f => _ui.TryEnqueue(() => OnFrame(f));
-            _sampler.Alerts.Raised += a => _ui.TryEnqueue(() => OnAlert(a));
-            _sampler.Alerts.Cleared += k => _ui.TryEnqueue(() => OnCleared(k));
             _sampler.Start();
         }
 
@@ -139,8 +160,8 @@ public sealed partial class MainViewModel : Observable, IDisposable
     {
         _settings = settings;
         Notifications.Enabled = settings.Toasts;
+        _alerts.Options = settings.Alerts;
         if (_sampler is null) return;
-        _sampler.Alerts.Options = settings.Alerts;
         bool logging = _sampler.LogPath is not null;
         if (settings.LogConnector && (!logging || !_sampler.LogPath!.StartsWith(settings.LogFolder, StringComparison.OrdinalIgnoreCase)))
         {
@@ -156,7 +177,18 @@ public sealed partial class MainViewModel : Observable, IDisposable
     private void PollGpu()
     {
         var s = _monitor.Sample(_gpu, includeConnector: false);
-        Temperature = s.TemperatureC is uint t ? $"{t} °C" : "-";
+        _alerts.ProcessGpu(s);
+
+        Temperature = s.CoreTempC is double t ? $"{t:F1} °C" : "-";
+        MemoryTemperature = s.MemoryTempC is double mt ? $"{mt:F1} °C" : "-";
+        MemoryTempSource = s.MemoryTempSource is { } src ? $"from {src}" : "";
+        if (s.BoardTemps is { } board)
+        {
+            if (BoardTemps.Count == 0)
+                foreach (var t0 in board) BoardTemps.Add(new BoardTempViewModel(t0.Name));
+            for (int i = 0; i < board.Count && i < BoardTemps.Count; i++)
+                BoardTemps[i].Value = board[i].Celsius is double bc ? $"{bc:F1} °C" : "-";
+        }
         CoreClock = s.CoreClockMhz is uint c ? $"{c} MHz" : "-";
         MemoryClock = s.MemoryClockMhz is uint m ? $"{m} MHz" : "-";
         Load = s.GpuUtilization is uint u ? $"{u} %" : "-";
@@ -219,7 +251,7 @@ public sealed partial class MainViewModel : Observable, IDisposable
 
     private void RefreshStatus()
     {
-        var worst = _sampler?.Alerts.Active.FirstOrDefault();
+        var worst = _alerts.Active.FirstOrDefault();
         Status = worst is null ? "All clear" : $"{worst.Severity}: {worst.Title}";
         StatusBrush = Theme.For(worst?.Severity ?? AlertSeverity.None);
         _worst = worst?.Severity ?? AlertSeverity.None;

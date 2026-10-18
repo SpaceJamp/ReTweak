@@ -10,7 +10,7 @@ namespace ReTweak.Core;
 /// </summary>
 public sealed class GpuMonitor : IDisposable
 {
-    private sealed record Device(GpuInfo Info, nint Nvml, uint FanCount, AsusPowerDetector? Detector);
+    private sealed record Device(GpuInfo Info, nint Nvml, uint FanCount, AsusPowerDetector? Detector, NvidiaThermal? Thermal);
 
     private readonly List<Device> _devices = [];
     private bool _disposed;
@@ -59,14 +59,24 @@ public sealed class GpuMonitor : IDisposable
 
             // Only probe the I2C bus on ASUS boards: address 0x56 means nothing on other vendors' cards.
             AsusPowerDetector? detector = null;
-            if (info.IsAsus && nvapi is not null && nvapiByBus.TryGetValue(pci.Bus, out var nvHandle))
-                detector = AsusPowerDetector.TryCreate(nvapi, nvHandle);
+            NvidiaThermal? thermal = null;
+            if (nvapi is not null && nvapiByBus.TryGetValue(pci.Bus, out var nvHandle))
+            {
+                if (info.IsAsus) detector = AsusPowerDetector.TryCreate(nvapi, nvHandle);
+                uint? nvmlCore = Nvml.DeviceGetTemperature(handle, 0, out uint c) == Nvml.Success ? c : null;
+                if (Nvml.DeviceGetArchitecture(handle, out uint arch) == Nvml.Success)
+                    thermal = NvidiaThermal.TryCreate(nvapi, nvHandle, arch, nvmlCore);
+            }
 
-            _devices.Add(new Device(info, handle, fans, detector));
+            _devices.Add(new Device(info, handle, fans, detector, thermal));
         }
     }
 
     public bool HasConnectorSensor(int gpuIndex) => _devices[gpuIndex].Detector is not null;
+
+    /// <summary>True if a memory temperature is available (ASUS board sensors, or the chip sensor on Blackwell).</summary>
+    public bool HasMemoryTemperature(int gpuIndex) =>
+        _devices[gpuIndex].Detector is not null || _devices[gpuIndex].Thermal?.HasMemory == true;
 
     /// <summary>Connector-only read (fast path for high-rate sampling). Null if unsupported or the read failed.</summary>
     public ConnectorReading? ReadConnector(int gpuIndex) => _devices[gpuIndex].Detector?.Read();
@@ -92,6 +102,16 @@ public sealed class GpuMonitor : IDisposable
         for (uint f = 0; f < d.FanCount; f++)
             if (Nvml.DeviceGetFanSpeed(h, f, out uint pct) == Nvml.Success) fans.Add(pct);
 
+        var (corePrecise, memChip) = d.Thermal?.Read() ?? (null, null);
+
+        // Memory temperature: on ASUS boards use the board sensors by the memory (what GPU Tweak III
+        // shows); otherwise fall back to the memory chips' own sensor (reads ~10 °C higher).
+        var board = d.Detector?.ReadBoardTemps();
+        double? memBoard = board is null ? null
+            : new[] { board[AsusPowerDetector.MemorySensor1].Celsius, board[AsusPowerDetector.MemorySensor2].Celsius }.Max();
+        double? memTemp = memBoard ?? memChip;
+        string? memSource = memBoard is not null ? "ASUS board sensors" : memChip is not null ? "memory chip sensor" : null;
+
         return new GpuSnapshot(
             DateTime.Now,
             d.Info,
@@ -105,7 +125,11 @@ public sealed class GpuMonitor : IDisposable
             fans,
             vramRc == Nvml.Success ? vram.Used : null,
             vramRc == Nvml.Success ? vram.Total : null,
-            includeConnector ? d.Detector?.Read() : null);
+            includeConnector ? d.Detector?.Read() : null,
+            corePrecise,
+            memTemp,
+            board,
+            memSource);
     }
 
     public void Dispose()

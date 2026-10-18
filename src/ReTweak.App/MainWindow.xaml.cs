@@ -27,7 +27,9 @@ public sealed partial class MainWindow : Window
 
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(TitleBar);
-        AppWindow.Resize(new SizeInt32(1180, 860));
+        // Resize takes physical pixels; scale so the layout gets the same room at 125-200% display scaling.
+        double scale = GetDpiForWindow(WinRT.Interop.WindowNative.GetWindowHandle(this)) / 96.0;
+        AppWindow.Resize(new SizeInt32((int)(1180 * scale), (int)(900 * scale)));
 
         ViewModel.HistoryChanged += RedrawCharts;
         ViewModel.AlertRaised += Notifications.Show;
@@ -45,6 +47,9 @@ public sealed partial class MainWindow : Window
     }
 
     public static Visibility Not(bool value) => value ? Visibility.Collapsed : Visibility.Visible;
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern uint GetDpiForWindow(nint hwnd);
 
     /// <summary>Fallback window when no NVIDIA driver/GPU is available.</summary>
     public static Window ForError(string message)

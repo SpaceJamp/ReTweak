@@ -58,6 +58,15 @@ public sealed record AlertOptions
     public int ReadFailuresForAlert { get; init; } = 10;
     /// <summary>Warn if reads succeed but the chip publishes nothing new for this long.</summary>
     public TimeSpan StaleAfter { get; init; } = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// GPU temperatures (°C), checked once a second. Conservative defaults that sit below
+    /// typical throttle points; adjust in Settings for your card.
+    /// </summary>
+    public double WarnCoreTempC { get; init; } = 83;
+    public double CriticalCoreTempC { get; init; } = 88;
+    public double WarnMemoryTempC { get; init; } = 90;
+    public double CriticalMemoryTempC { get; init; } = 100;
 }
 
 /// <summary>
@@ -165,6 +174,25 @@ public sealed class AlertEngine
                    $"Pin {worstA.Pin} carries x{r.Imbalance:F2} the average ({worstA.Amps:F2} A).");
 
             EvaluateTrend(frame.Uptime, valid);
+        }
+    }
+
+    /// <summary>
+    /// GPU temperature checks; call once per GPU sample (~1 s). Missing readings leave their
+    /// alert as it is, so an alert can't silently clear just because a source went away.
+    /// </summary>
+    public void ProcessGpu(GpuSnapshot s)
+    {
+        lock (_lock)
+        {
+            var o = Options;
+            void Check(string key, double? value, double warn, double crit, string name)
+            {
+                if (value is not double v) return;
+                Update(key, Level(v, warn, crit), $"{name} temperature high", $"{v:F1} °C (warning {warn:F0} °C, critical {crit:F0} °C)");
+            }
+            Check("temp:core", s.CoreTempC, o.WarnCoreTempC, o.CriticalCoreTempC, "GPU core");
+            Check("temp:memory", s.MemoryTempC, o.WarnMemoryTempC, o.CriticalMemoryTempC, "GPU memory");
         }
     }
 

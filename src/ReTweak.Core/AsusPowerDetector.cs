@@ -14,13 +14,24 @@ internal sealed class AsusPowerDetector
     private const byte RegIdLow = 0x1E;
     private const byte RegIdHigh = 0x1F;
     private const byte RegPins = 0x80;      // 6 x (u16 BE mV, u16 BE mA)
+    private const byte RegBoardTemps = 0x60; // 8 x s16 BE, tenths of a °C
     private const ushort MinVersion = 0x500; // same gate GPU Tweak III uses
     private const double MaxSaneAmps = 50;   // GPU Tweak III treats more as a bad read
     // A running card can't have a pin outside this range; 0x0000 / 0xFFFF frames are bus glitches.
     private const double MinSaneVolts = 6, MaxSaneVolts = 15;
 
+    /// <summary>
+    /// Board sensor names in register order. Positions 2 and 3 sit by the memory and match
+    /// GPU Tweak III's memory temperature; the rest are named after where they appear to be.
+    /// </summary>
+    public static readonly string[] BoardSensorNames =
+        ["VRM 1", "Core", "Memory 1", "Memory 2", "VRM 2", "Sensor 6", "Sensor 7", "Sensor 8"];
+    public const int MemorySensor1 = 2, MemorySensor2 = 3;
+
     private readonly NvApi _nvapi;
     private readonly nint _gpu;
+    // The connector sampler and the GPU poll run on different threads; keep their I2C transactions apart.
+    private readonly object _bus = new();
 
     public ushort Version { get; }
 
@@ -44,7 +55,8 @@ internal sealed class AsusPowerDetector
     public ConnectorReading? Read()
     {
         Span<byte> buf = stackalloc byte[24];
-        if (_nvapi.I2CRead(_gpu, Port, Address, RegPins, buf) != 0) return null;
+        lock (_bus)
+            if (_nvapi.I2CRead(_gpu, Port, Address, RegPins, buf) != 0) return null;
 
         var pins = new PinReading[6];
         for (int i = 0; i < 6; i++)
@@ -56,5 +68,24 @@ internal sealed class AsusPowerDetector
             pins[i] = new PinReading(i + 1, volts, amps, valid);
         }
         return new ConnectorReading(pins);
+    }
+
+    /// <summary>
+    /// The 8 board temperatures from register 0x60, or null if the read failed. A sensor
+    /// outside -40..150 °C is reported as null (absent or glitched).
+    /// </summary>
+    public IReadOnlyList<BoardTemp>? ReadBoardTemps()
+    {
+        Span<byte> buf = stackalloc byte[16];
+        lock (_bus)
+            if (_nvapi.I2CRead(_gpu, Port, Address, RegBoardTemps, buf) != 0) return null;
+
+        var temps = new BoardTemp[8];
+        for (int i = 0; i < 8; i++)
+        {
+            double c = (short)(buf[2 * i] << 8 | buf[2 * i + 1]) / 10.0;
+            temps[i] = new BoardTemp(BoardSensorNames[i], c is > -40 and < 150 ? c : null);
+        }
+        return temps;
     }
 }

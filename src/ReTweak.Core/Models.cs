@@ -28,6 +28,9 @@ public sealed record ConnectorReading(IReadOnlyList<PinReading> Pins)
     }
 }
 
+/// <summary>One ASUS board temperature sensor; <see cref="Celsius"/> is null when absent or implausible.</summary>
+public readonly record struct BoardTemp(string Name, double? Celsius);
+
 public sealed record GpuInfo(int Index, string Name, uint PciBus, ushort DeviceId, ushort SubVendorId, ushort SubDeviceId)
 {
     public bool IsAsus => SubVendorId == 0x1043;
@@ -46,4 +49,12 @@ public sealed record GpuSnapshot(
     IReadOnlyList<uint> FanPercents,
     ulong? VramUsedBytes,
     ulong? VramTotalBytes,
-    ConnectorReading? Connector);
+    ConnectorReading? Connector,
+    double? CoreTempPreciseC = null,
+    double? MemoryTempC = null,
+    IReadOnlyList<BoardTemp>? BoardTemps = null,
+    string? MemoryTempSource = null)
+{
+    /// <summary>Best available core temperature: the precise sensor if present, else NVML's integer value.</summary>
+    public double? CoreTempC => CoreTempPreciseC ?? TemperatureC;
+}

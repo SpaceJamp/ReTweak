@@ -50,6 +50,7 @@ static class Simulate
             limit: _ => false, limitName: "none", expect: null);
 
         StaleCheck();
+        TempCheck();
 
         Console.WriteLine(_failures == 0 ? "\nAll scenarios passed." : $"\n{_failures} scenario(s) FAILED.");
         return _failures;
@@ -147,6 +148,39 @@ static class Simulate
         }
         Console.WriteLine($"Replayed {lines.Count} frames over {(t - first.GetValueOrDefault()).TotalMinutes:F1} min: {raised} alert(s).");
         return raised;
+    }
+
+    /// <summary>GPU temperature alerts, sampled once a second like the app does.</summary>
+    private static void TempCheck()
+    {
+        var gpu = new GpuInfo(0, "Simulated GPU", 0, 0, 0, 0);
+        GpuSnapshot Snap(double core, double mem) => new(DateTime.Now, gpu, (uint)core, null, null, null, null, null, null,
+                                                          [], null, null, null, CoreTempPreciseC: core, MemoryTempC: mem);
+
+        Console.WriteLine("\n== Memory temperature climbs 1 °C/s from 70 °C (warn 90, critical 100)");
+        var engine = new AlertEngine();
+        double? warnAt = null, critAt = null;
+        int t = 0;
+        engine.Raised += a =>
+        {
+            if (a.Key != "temp:memory") return;
+            Console.WriteLine($"  t={t,3}s  {a.Severity,-8} {a.Title}: {a.Detail}");
+            if (a.Severity == AlertSeverity.Warning) warnAt ??= t;
+            if (a.Severity == AlertSeverity.Critical) critAt ??= t;
+        };
+        for (t = 0; t <= 40; t++) engine.ProcessGpu(Snap(60, 70 + t));
+        bool pass = warnAt is >= 20 and <= 24 && critAt is >= 30 && critAt <= 33;
+        if (!pass) _failures++;
+        Console.WriteLine($"  {(pass ? "PASS" : "FAIL")}: warning at {warnAt?.ToString() ?? "never"} s (crossed 90 °C at 20 s), " +
+                          $"critical at {critAt?.ToString() ?? "never"} s (crossed 100 °C at 30 s)");
+
+        Console.WriteLine("\n== One-second memory spike to 101 °C (no alert)");
+        var quiet = new AlertEngine();
+        int raised = 0;
+        quiet.Raised += _ => raised++;
+        for (t = 0; t <= 10; t++) quiet.ProcessGpu(Snap(60, t == 5 ? 101 : 70));
+        if (raised != 0) _failures++;
+        Console.WriteLine($"  {(raised == 0 ? "PASS" : "FAIL")}: {raised} alert(s)");
     }
 
     private static ConnectorReading Pins(Func<int, double> v, Func<int, double> a) =>
