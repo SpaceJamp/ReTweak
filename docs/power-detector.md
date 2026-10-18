@@ -59,7 +59,7 @@ vendor `0x1043`), because address `0x56` means nothing on other vendors' cards.
 | `0x4C`..`0x4F` | 1 each | Presence probes before the detector object is created | `10004630` |
 | `0x80` | 24 | Six groups of (u16 BE millivolts, u16 BE milliamps). **Pin 1 is the last group** | `10003e30` |
 | `0x98` | 4 | Two u16 BE ×0.001 (seen 12.000 / 0.780). GPU Tweak multiplies them (×2 ×1000). Meaning not confirmed | `10003e30` |
-| `0x60` | 16 | Signed values, not decoded | `10004160` |
+| `0x60` | 16 | **Eight board temperatures**, s16 BE in tenths of a °C (`0x0164` = 35.6 °C). See "Temperature sensors" | `10004160` |
 | `0xC0` | 12 | Three u32 BE counters, probably usage/"mileage" time | `10003c40` |
 
 GPU Tweak III treats a current above 50 A as a bad read. ReTweak also rejects
@@ -80,12 +80,33 @@ Polling faster than ~600 ms returns duplicate frames. ReTweak polls every 100 ms
 so each new frame is picked up within 100 ms, drops duplicates, and raises a
 "readings frozen" alert if nothing changes for 10 s.
 
+## Temperature sensors (RTX 5080 Astral, 2026-10-18)
+
+Three sources, all read-only:
+
+| Source | What | Notes |
+|---|---|---|
+| NVML `nvmlDeviceGetTemperature` | GPU core, whole °C | Documented; the only sensor NVML's thermal API lists on this card |
+| NVAPI `NvAPI_GPU_ThermalGetSensors` (`0x65FE3AAD`, undocumented) | 19-slot mask, 1/256 °C; `0xFF00` = no sensor | **Slot 1** = core (precise), **slot 2** = memory chip sensor, whole °C. Older architectures reportedly use slot 1 for hotspot and slot 9 for memory junction, so ReTweak only enables this on Blackwell (NVML arch 10) |
+| ASUS chip register `0x60` | Eight board sensors, 0.1 °C | Order: VRM 1, Core, **Memory 1**, **Memory 2**, VRM 2, then three more. GPU Tweak III's memory temperature matches Memory 1/2 (~35 °C at idle) |
+
+The memory chip sensor (slot 2) reads about 10 °C above the board memory sensors at
+idle (44 vs 35 °C). A load test showed it lags the core and stays warm after load
+stops, which is how memory, not a hotspot, behaves. ReTweak uses the board sensors
+on ASUS cards (to match GPU Tweak III) and the chip sensor elsewhere.
+
+No hotspot reading is available through NVML or the NVAPI calls above on RTX 50.
+`research/thermal_probe.py` dumps the NVAPI slots and can log them under load;
+`research/asus_regs.py` dumps ASUS chip registers.
+
 ## Research tools
 
-In `research/` (Python, stdlib only except `dis.py`, which needs `capstone`):
+In `research/` (Python, stdlib only except `dis32.py`, which needs `capstone`):
 
 - `pe_exports.py FILE...`: list a PE's exports and imports
 - `strgrep.py REGEX FILE...`: ASCII and UTF-16 string search
 - `nvapi_ids.py FILE`: find embedded NVAPI QueryInterface IDs
-- `dis.py FILE at|func|callers|xref|floats OFFSET`: x86 disassembly helpers
+- `dis32.py FILE at|func|callers|xref|floats OFFSET`: x86 disassembly helpers
 - `pinread.py [--watch] [--raw]`: the original standalone Python reader
+- `asus_regs.py [REG LEN]... [--watch]`: dump ASUS chip registers with signed/BE interpretations
+- `thermal_probe.py [--watch out.csv secs]`: list NVAPI/NVML temperature sensors, optionally log them

@@ -61,7 +61,7 @@
                 <!-- GPU tiles -->
                 <Grid ColumnSpacing="12" RowSpacing="12">
                     <Grid.ColumnDefinitions>
-                        <ColumnDefinition /><ColumnDefinition /><ColumnDefinition /><ColumnDefinition />
+                        <ColumnDefinition /><ColumnDefinition /><ColumnDefinition /><ColumnDefinition /><ColumnDefinition />
                     </Grid.ColumnDefinitions>
                     <Grid.RowDefinitions>
                         <RowDefinition /><RowDefinition />
@@ -69,29 +69,45 @@
 
                     <Border Style="{StaticResource Card}">
                         <StackPanel>
-                            <TextBlock Text="GPU temperature" Style="{StaticResource TileLabel}" />
+                            <TextBlock Text="GPU core temperature" Style="{StaticResource TileLabel}" />
                             <TextBlock Text="{x:Bind ViewModel.Temperature, Mode=OneWay}" Style="{StaticResource TileValue}" />
                         </StackPanel>
                     </Border>
                     <Border Grid.Column="1" Style="{StaticResource Card}">
                         <StackPanel>
-                            <TextBlock Text="Core clock" Style="{StaticResource TileLabel}" />
-                            <TextBlock Text="{x:Bind ViewModel.CoreClock, Mode=OneWay}" Style="{StaticResource TileValue}" />
+                            <TextBlock Text="Memory temperature" Style="{StaticResource TileLabel}" />
+                            <TextBlock Text="{x:Bind ViewModel.MemoryTemperature, Mode=OneWay}" Style="{StaticResource TileValue}" />
+                            <TextBlock Text="Not reported by this card" Visibility="{x:Bind local:MainWindow.Not(ViewModel.HasMemoryTemp)}"
+                                       Style="{StaticResource CaptionTextBlockStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                            <TextBlock Text="{x:Bind ViewModel.MemoryTempSource, Mode=OneWay}" Visibility="{x:Bind ViewModel.HasMemoryTemp}"
+                                       Style="{StaticResource CaptionTextBlockStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                         </StackPanel>
                     </Border>
                     <Border Grid.Column="2" Style="{StaticResource Card}">
-                        <StackPanel>
-                            <TextBlock Text="Memory clock" Style="{StaticResource TileLabel}" />
-                            <TextBlock Text="{x:Bind ViewModel.MemoryClock, Mode=OneWay}" Style="{StaticResource TileValue}" />
-                        </StackPanel>
-                    </Border>
-                    <Border Grid.Column="3" Style="{StaticResource Card}">
                         <StackPanel>
                             <TextBlock Text="GPU load" Style="{StaticResource TileLabel}" />
                             <TextBlock Text="{x:Bind ViewModel.Load, Mode=OneWay}" Style="{StaticResource TileValue}" />
                         </StackPanel>
                     </Border>
-                    <Border Grid.Row="1" Grid.ColumnSpan="2" Style="{StaticResource Card}">
+                    <Border Grid.Column="3" Style="{StaticResource Card}">
+                        <StackPanel>
+                            <TextBlock Text="Fans" Style="{StaticResource TileLabel}" />
+                            <TextBlock Text="{x:Bind ViewModel.Fans, Mode=OneWay}" Style="{StaticResource TileValue}" />
+                        </StackPanel>
+                    </Border>
+                    <Border Grid.Column="4" Style="{StaticResource Card}">
+                        <StackPanel>
+                            <TextBlock Text="Core clock" Style="{StaticResource TileLabel}" />
+                            <TextBlock Text="{x:Bind ViewModel.CoreClock, Mode=OneWay}" Style="{StaticResource TileValue}" />
+                        </StackPanel>
+                    </Border>
+                    <Border Grid.Row="1" Grid.Column="3" Style="{StaticResource Card}">
+                        <StackPanel>
+                            <TextBlock Text="Memory clock" Style="{StaticResource TileLabel}" />
+                            <TextBlock Text="{x:Bind ViewModel.MemoryClock, Mode=OneWay}" Style="{StaticResource TileValue}" />
+                        </StackPanel>
+                    </Border>
+                    <Border Grid.Row="1" Grid.ColumnSpan="3" Style="{StaticResource Card}">
                         <StackPanel>
                             <TextBlock Text="Board power" Style="{StaticResource TileLabel}" />
                             <StackPanel Orientation="Horizontal" Spacing="8">
@@ -102,13 +118,7 @@
                             <ProgressBar Value="{x:Bind ViewModel.PowerPercent, Mode=OneWay}" Maximum="100" Margin="0,8,0,0" />
                         </StackPanel>
                     </Border>
-                    <Border Grid.Row="1" Grid.Column="2" Style="{StaticResource Card}">
-                        <StackPanel>
-                            <TextBlock Text="Fans" Style="{StaticResource TileLabel}" />
-                            <TextBlock Text="{x:Bind ViewModel.Fans, Mode=OneWay}" Style="{StaticResource TileValue}" />
-                        </StackPanel>
-                    </Border>
-                    <Border Grid.Row="1" Grid.Column="3" Style="{StaticResource Card}">
+                    <Border Grid.Row="1" Grid.Column="4" Style="{StaticResource Card}">
                         <StackPanel>
                             <TextBlock Text="VRAM" Style="{StaticResource TileLabel}" />
                             <TextBlock Text="{x:Bind ViewModel.Vram, Mode=OneWay}" Style="{StaticResource TileValue}" />
@@ -116,6 +126,28 @@
                         </StackPanel>
                     </Border>
                 </Grid>
+
+                <!-- ASUS board temperature sensors -->
+                <Border Style="{StaticResource Card}" Visibility="{x:Bind ViewModel.HasBoardTemps}">
+                    <StackPanel Spacing="10">
+                        <TextBlock Text="Board temperatures · ASUS sensors" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                        <ItemsControl ItemsSource="{x:Bind ViewModel.BoardTemps}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <StackPanel Orientation="Horizontal" Spacing="28" />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="local:BoardTempViewModel">
+                                    <StackPanel MinWidth="90">
+                                        <TextBlock Text="{x:Bind Name}" Style="{StaticResource TileLabel}" />
+                                        <TextBlock Text="{x:Bind Value, Mode=OneWay}" Style="{StaticResource BodyStrongTextBlockStyle}" Margin="0,2,0,0" />
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </Border>
 
                 <!-- 12V-2x6 connector -->
                 <Border Style="{StaticResource Card}" Visibility="{x:Bind ViewModel.HasConnector}">
@@ -152,10 +184,14 @@
                         </StackPanel>
 
                         <StackPanel Grid.Column="1" Spacing="12">
-                            <Grid ColumnSpacing="12">
+                            <!-- 2 x 2 so the stats stay readable next to the pin bars at smaller window widths -->
+                            <Grid ColumnSpacing="12" RowSpacing="8">
                                 <Grid.ColumnDefinitions>
-                                    <ColumnDefinition /><ColumnDefinition /><ColumnDefinition /><ColumnDefinition />
+                                    <ColumnDefinition /><ColumnDefinition />
                                 </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition /><RowDefinition />
+                                </Grid.RowDefinitions>
                                 <StackPanel>
                                     <TextBlock Text="Connector power" Style="{StaticResource TileLabel}" />
                                     <TextBlock Text="{x:Bind ViewModel.ConnectorWatts, Mode=OneWay}" Style="{StaticResource TileValue}" />
@@ -164,11 +200,11 @@
                                     <TextBlock Text="Total current" Style="{StaticResource TileLabel}" />
                                     <TextBlock Text="{x:Bind ViewModel.ConnectorAmps, Mode=OneWay}" Style="{StaticResource TileValue}" />
                                 </StackPanel>
-                                <StackPanel Grid.Column="2">
+                                <StackPanel Grid.Row="1">
                                     <TextBlock Text="Voltage spread" Style="{StaticResource TileLabel}" />
                                     <TextBlock Text="{x:Bind ViewModel.Spread, Mode=OneWay}" Style="{StaticResource TileValue}" />
                                 </StackPanel>
-                                <StackPanel Grid.Column="3">
+                                <StackPanel Grid.Row="1" Grid.Column="1">
                                     <TextBlock Text="Imbalance" Style="{StaticResource TileLabel}" />
                                     <TextBlock Text="{x:Bind ViewModel.Imbalance, Mode=OneWay}" Style="{StaticResource TileValue}" />
                                 </StackPanel>

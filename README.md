@@ -6,7 +6,9 @@ going wrong.
 
 - GPU stats on any NVIDIA card through NVML (temperature, clocks, load, board power, fans, VRAM)
 - **Per-pin voltage and current** on ASUS cards with Power Detector+ (e.g. ROG Astral), read directly from the card's monitor chip; see [docs/power-detector.md](docs/power-detector.md)
-- Early-warning alerts: pin over-current, low/high voltage, pin-to-pin voltage spread, current imbalance, fast voltage drops or current ramps, frozen sensor
+- **Temperatures**: precise core (0.01 °C) and memory on RTX 50; on ASUS cards, memory comes from the
+  board sensors GPU Tweak III uses, plus 8 board sensors (VRM, core, memory and more)
+- Early-warning alerts: pin over-current, low/high voltage, pin-to-pin voltage spread, current imbalance, fast voltage drops or current ramps, frozen sensor, high core or memory temperature
 - Native Windows notifications for alerts
 - Runs in the notification area: closing the window keeps monitoring; the tray icon shows the worst active alert
 - Optional start with Windows (`--minimized`, tray only), CSV logging and adjustable thresholds in Settings
@@ -58,6 +60,8 @@ publishes new data about every 600 ms, which sets the alert latency.
 | Current imbalance (≥ 10 A load) | ×1.25 | ×1.70 | |
 | Voltage falling / current rising | projected to hit critical within 5 s | | ~1.8 s after the trend starts |
 | Sensor frozen or not responding | 10 s without new data / 10 failed reads | | |
+| GPU core temperature | 83 °C | 88 °C | ~3 s / ~2 s |
+| Memory temperature | 90 °C | 100 °C | ~3 s / ~2 s |
 
 ## License
 

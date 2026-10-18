@@ -16,11 +16,13 @@ IDS = {
     0x6FF81213: "NvAPI_GPU_GetPstates20",
     0xE3640A56: "NvAPI_GPU_GetThermalSettings",
     0x5F608315: "NvAPI_GPU_GetTachReading",
+    0x65FE3AAD: "NvAPI_GPU_ThermalGetSensors (undocumented)",
 }
 
-d = open(sys.argv[1], "rb").read()
-for i in range(len(d) - 4):
-    v = struct.unpack_from("<I", d, i)[0]
-    if v in IDS:
-        ctx = d[max(0, i - 6):i + 10].hex(" ")
-        print(f"{i:08x}  {IDS[v]:32s} prev/next bytes: {ctx}")
+if __name__ == "__main__":
+    d = open(sys.argv[1], "rb").read()
+    for i in range(len(d) - 4):
+        v = struct.unpack_from("<I", d, i)[0]
+        if v in IDS:
+            ctx = d[max(0, i - 6):i + 10].hex(" ")
+            print(f"{i:08x}  {IDS[v]:32s} prev/next bytes: {ctx}")

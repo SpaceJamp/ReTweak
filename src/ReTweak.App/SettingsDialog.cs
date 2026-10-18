@@ -40,13 +40,22 @@ internal static class SettingsDialog
         var spreadCrit = Num("Pin voltage spread critical (mV)", o.CriticalSpreadVolts * 1000);
         var imbWarn = Num("Current imbalance warning (×)", o.WarnImbalance);
         var imbCrit = Num("Current imbalance critical (×)", o.CriticalImbalance);
+        var coreWarn = Num("GPU core temperature warning (°C)", o.WarnCoreTempC);
+        var coreCrit = Num("GPU core temperature critical (°C)", o.CriticalCoreTempC);
+        var memWarn = Num("Memory temperature warning (°C)", o.WarnMemoryTempC);
+        var memCrit = Num("Memory temperature critical (°C)", o.CriticalMemoryTempC);
+        foreach (var n in new[] { coreWarn, coreCrit, memWarn, memCrit }) n.SmallChange = 1;
         foreach (var n in new[] { spreadWarn, spreadCrit }) n.SmallChange = 5;
         foreach (var n in new[] { lowWarn, lowCrit, highWarn, imbWarn, imbCrit }) n.SmallChange = 0.01;
 
         var grid = new Grid { ColumnSpacing = 12, RowSpacing = 8 };
         grid.ColumnDefinitions.Add(new ColumnDefinition());
         grid.ColumnDefinitions.Add(new ColumnDefinition());
-        var pairs = new (NumberBox, NumberBox?)[] { (pinWarn, pinCrit), (lowWarn, lowCrit), (highWarn, null), (spreadWarn, spreadCrit), (imbWarn, imbCrit) };
+        var pairs = new (NumberBox, NumberBox?)[]
+        {
+            (pinWarn, pinCrit), (lowWarn, lowCrit), (highWarn, null), (spreadWarn, spreadCrit), (imbWarn, imbCrit),
+            (coreWarn, coreCrit), (memWarn, memCrit),
+        };
         for (int r = 0; r < pairs.Length; r++)
         {
             grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -63,6 +72,8 @@ internal static class SettingsDialog
             lowWarn.Value = d.WarnLowVolts; lowCrit.Value = d.CriticalLowVolts; highWarn.Value = d.WarnHighVolts;
             spreadWarn.Value = d.WarnSpreadVolts * 1000; spreadCrit.Value = d.CriticalSpreadVolts * 1000;
             imbWarn.Value = d.WarnImbalance; imbCrit.Value = d.CriticalImbalance;
+            coreWarn.Value = d.WarnCoreTempC; coreCrit.Value = d.CriticalCoreTempC;
+            memWarn.Value = d.WarnMemoryTempC; memCrit.Value = d.CriticalMemoryTempC;
         };
 
         var error = new InfoBar { Severity = InfoBarSeverity.Error, IsClosable = false, IsOpen = false, Title = "Can't save" };
@@ -95,7 +106,7 @@ internal static class SettingsDialog
         dialog.PrimaryButtonClick += (_, args) =>
         {
             string? problem = null;
-            var boxes = new[] { pinWarn, pinCrit, lowWarn, lowCrit, highWarn, spreadWarn, spreadCrit, imbWarn, imbCrit };
+            var boxes = new[] { pinWarn, pinCrit, lowWarn, lowCrit, highWarn, spreadWarn, spreadCrit, imbWarn, imbCrit, coreWarn, coreCrit, memWarn, memCrit };
             if (boxes.Any(b => double.IsNaN(b.Value))) problem = "Every threshold needs a number.";
 
             var alerts = current.Alerts with
@@ -109,6 +120,10 @@ internal static class SettingsDialog
                 CriticalSpreadVolts = spreadCrit.Value / 1000,
                 WarnImbalance = imbWarn.Value,
                 CriticalImbalance = imbCrit.Value,
+                WarnCoreTempC = coreWarn.Value,
+                CriticalCoreTempC = coreCrit.Value,
+                WarnMemoryTempC = memWarn.Value,
+                CriticalMemoryTempC = memCrit.Value,
             };
             problem ??= AppSettings.Validate(alerts);
             if (problem is null && log.IsOn && string.IsNullOrWhiteSpace(logFolder.Text)) problem = "Choose a log folder or turn logging off.";

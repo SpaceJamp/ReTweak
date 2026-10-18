@@ -55,6 +55,12 @@ internal static partial class Nvml
     [LibraryImport(Lib, EntryPoint = "nvmlDeviceGetPciInfo_v3")]
     public static partial int DeviceGetPciInfo(nint device, out PciInfo pci);
 
+    /// <summary>nvmlDeviceArchitecture_t values used here.</summary>
+    public const uint ArchBlackwell = 10;
+
+    [LibraryImport(Lib, EntryPoint = "nvmlDeviceGetArchitecture")]
+    public static partial int DeviceGetArchitecture(nint device, out uint arch);
+
     [LibraryImport(Lib, EntryPoint = "nvmlDeviceGetTemperature")]
     public static partial int DeviceGetTemperature(nint device, uint sensor, out uint celsius);
 
