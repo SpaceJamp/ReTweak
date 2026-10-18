@@ -62,3 +62,17 @@ publishes new data about every 600 ms, which sets the alert latency.
 | Sensor frozen or not responding | 10 s without new data / 10 failed reads | | |
 | GPU core temperature | 83 °C | 88 °C | ~3 s / ~2 s |
 | Memory temperature | 90 °C | 100 °C | ~3 s / ~2 s |
+
+## License
+
+Copyright (C) 2026 Yeti
+
+ReTweak is free software: you can redistribute it and/or modify it under the
+terms of the GNU General Public License as published by the Free Software
+Foundation, either version 3 of the License, or (at your option) any later
+version. It is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; see [LICENSE](LICENSE) for the full terms.
+
+ReTweak is an independent project and is not affiliated with or endorsed by
+ASUS or NVIDIA. "GPU Tweak", "ROG" and "Astral" are trademarks of ASUSTeK
+Computer Inc.; NVIDIA, NVAPI and NVML are trademarks of NVIDIA Corporation.
