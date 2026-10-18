@@ -1,0 +1,7 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/ReTweak.App/ReTweak.App.csproj" />
+    <Project Path="src/ReTweak.Cli/ReTweak.Cli.csproj" />
+    <Project Path="src/ReTweak.Core/ReTweak.Core.csproj" />
+  </Folder>
+</Solution>

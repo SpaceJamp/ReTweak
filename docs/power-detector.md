@@ -1,0 +1,91 @@
+# ASUS Power Detector+ (12V-2x6 per-pin readout)
+
+How ASUS cards such as the ROG Astral report per-pin voltage and current on the
+12V-2x6 / 12VHPWR connector, recovered from GPU Tweak III and verified on real
+hardware. ReTweak implements this in `src/ReTweak.Core/AsusPowerDetector.cs`.
+
+Reference setup: GPU Tweak III 2.1.9.5, ROG Astral RTX 5080
+(PCI `10DE:2C02`, subsystem `1043:89DE`), NVIDIA driver 617.42.
+
+## Where GPU Tweak III keeps it
+
+GPU Tweak III installs to `C:\Program Files (x86)\ASUS\GPUTweakIII` and is native
+C++ (mostly 32-bit), with a SOUI-based UI.
+
+| Piece | Role |
+|---|---|
+| `GPU Tweak III.exe` | UI (`power_detector_root_wnd`, labels "CARD 12V-2X6", "MB 12V-2X6", "ROG EQ 12V-2X6"). Calls `Get12Voltage`, `GetPowerDetection`, `SetPowerDetection` |
+| `TweakInterface.dll` | Exports `GetPowerDetection` / `SetPowerDetection` for the UI |
+| `ExpanModule.dll` | Class `CPowerDetect`; exports `Expan_Api_GetPowerStatus`, `Expan_Api_Get_Sensor_RealTime_Data`, `Expan_Api_Check_MTPD_Support`, ... This is where the sensor is read |
+
+"MB 12V-2X6" and "ROG EQ 12V-2X6" readings come from the motherboard side
+(AsIO / ASUS kernel drivers), not from the card, and aren't covered here.
+
+## Transport
+
+`ExpanModule.dll` loads `nvapi.dll` at runtime and resolves functions through
+`nvapi_QueryInterface`. It uses only these IDs:
+
+| ID | Function |
+|---|---|
+| `0x0150E828` | `NvAPI_Initialize` |
+| `0xE5AC921F` | `NvAPI_EnumPhysicalGPUs` |
+| `0x1BE0B8E5` | `NvAPI_GPU_GetBusId` |
+| `0x4D7B0709` | `NvAPI_I2CReadEx` |
+
+**There is no I2C write.** The whole readout is register reads, which is why a
+standalone reader is low-risk.
+
+The wrapper (`ExpanModule.dll` VA `0x10001410`) fills a global `NV_I2C_INFO_V3`:
+
+| Field | Value |
+|---|---|
+| `version` | `sizeof(NV_I2C_INFO_V3) \| (3 << 16)` (`0x3002C` on x86) |
+| `i2cDevAddress` | `0x56` (8-bit form; 7-bit `0x2B`) |
+| `regAddrSize` | 1 |
+| `i2cSpeed` | `0xFFFF` (deprecated field) |
+| `i2cSpeedKhz` | 4 (`NVAPI_I2C_SPEED_100KHZ`) |
+| `portId` / `bIsPortIdSet` | 1 / 1 |
+| 3rd argument | pointer to a `NvU32` set to 1 |
+
+GPU Tweak III only probes on ASUS boards; ReTweak does the same (subsystem
+vendor `0x1043`), because address `0x56` means nothing on other vendors' cards.
+
+## Registers
+
+| Reg | Len | Contents | ExpanModule code |
+|---|---|---|---|
+| `0x1E` / `0x1F` | 1 + 1 | Chip id/version, low/high byte. Must be `>= 0x500` (this card: `0x0513`) | `10006da0` |
+| `0x4C`..`0x4F` | 1 each | Presence probes before the detector object is created | `10004630` |
+| `0x80` | 24 | Six groups of (u16 BE millivolts, u16 BE milliamps). **Pin 1 is the last group** | `10003e30` |
+| `0x98` | 4 | Two u16 BE ×0.001 (seen 12.000 / 0.780). GPU Tweak multiplies them (×2 ×1000). Meaning not confirmed | `10003e30` |
+| `0x60` | 16 | Signed values, not decoded | `10004160` |
+| `0xC0` | 12 | Three u32 BE counters, probably usage/"mileage" time | `10003c40` |
+
+GPU Tweak III treats a current above 50 A as a bad read. ReTweak also rejects
+voltages outside 6–15 V, since an all-zero or all-`0xFF` frame is a bus glitch.
+
+## Measured behaviour (RTX 5080 Astral, 2026-10-17)
+
+| Property | Value |
+|---|---|
+| I2C read latency (24 bytes) | ~4 ms median, ~5 ms p95, no failures in 300 back-to-back reads |
+| **New-data rate** | **one frame every ~600 ms (1.7/s)**, the same at idle and under load |
+| Resolution | 8 mV voltage steps; ~20 mA current steps |
+| Noise at steady load | ±25 mA current, ±2 mV voltage |
+| Accuracy check | connector 382 W vs driver board power 403 W; the ~19 W median gap is PCIe slot power |
+| Healthy cable at 400 W | 4.9–5.3 A per pin, max 5.58 A; imbalance ×1.04; pin spread 16 mV; lowest pin 11.872 V (104 mV droop) |
+
+Polling faster than ~600 ms returns duplicate frames. ReTweak polls every 100 ms
+so each new frame is picked up within 100 ms, drops duplicates, and raises a
+"readings frozen" alert if nothing changes for 10 s.
+
+## Research tools
+
+In `research/` (Python, stdlib only except `dis.py`, which needs `capstone`):
+
+- `pe_exports.py FILE...`: list a PE's exports and imports
+- `strgrep.py REGEX FILE...`: ASCII and UTF-16 string search
+- `nvapi_ids.py FILE`: find embedded NVAPI QueryInterface IDs
+- `dis.py FILE at|func|callers|xref|floats OFFSET`: x86 disassembly helpers
+- `pinread.py [--watch] [--raw]`: the original standalone Python reader
