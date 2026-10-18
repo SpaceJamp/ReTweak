@@ -1,4 +1,4 @@
-<img src="docs/icon.png" alt="" width="96" align="top">
+<img src="docs/icon.png" alt="" width="96" align="top_right">
 
 
 # ReTweak
