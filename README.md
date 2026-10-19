@@ -1,7 +1,6 @@
-<img src="docs/icon.png" alt="" width="96" align="top_right">
-
-
 # ReTweak
+
+<img src="docs/icon.png" alt="ReTweak icon" width="96" align="right">
 
 A lightweight successor to ASUS GPU Tweak III for NVIDIA cards, focused first on
 **monitoring the 12V-2x6 power connector** and warning early when something is
