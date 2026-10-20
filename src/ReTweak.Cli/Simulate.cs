@@ -183,6 +183,64 @@ static class Simulate
         for (t = 0; t <= 10; t++) quiet.ProcessGpu(Snap(60, t == 5 ? 101 : 70));
         if (raised != 0) _failures++;
         Console.WriteLine($"  {(raised == 0 ? "PASS" : "FAIL")}: {raised} alert(s)");
+
+        HotspotCheck(gpu);
+    }
+
+    /// <summary>RTX 50 hotspot alerts (placeholder thresholds: warn 95, critical 105).</summary>
+    private static void HotspotCheck(GpuInfo gpu)
+    {
+        GpuSnapshot Snap(double? hotspot) => new(DateTime.Now, gpu, 70, null, null, null, null, null, null,
+                                                 [], null, null, null, CoreTempPreciseC: 70, MemoryTempC: 70, HotspotC: hotspot);
+        var o = new AlertOptions();
+
+        Console.WriteLine($"\n== Hotspot climbs 1 °C/s from 80 °C (warn {o.WarnHotspotTempC:F0}, critical {o.CriticalHotspotTempC:F0})");
+        var engine = new AlertEngine();
+        double? warnAt = null, critAt = null;
+        int t = 0;
+        engine.Raised += a =>
+        {
+            if (a.Key != "temp:hotspot") return;
+            Console.WriteLine($"  t={t,3}s  {a.Severity,-8} {a.Title}: {a.Detail}");
+            if (a.Severity == AlertSeverity.Warning) warnAt ??= t;
+            if (a.Severity == AlertSeverity.Critical) critAt ??= t;
+        };
+        for (t = 0; t <= 35; t++) engine.ProcessGpu(Snap(80 + t));
+        bool pass = warnAt is >= 15 and <= 19 && critAt is >= 25 and <= 28;
+        if (!pass) _failures++;
+        Console.WriteLine($"  {(pass ? "PASS" : "FAIL")}: warning at {warnAt?.ToString() ?? "never"} s (crossed 95 °C at 15 s), " +
+                          $"critical at {critAt?.ToString() ?? "never"} s (crossed 105 °C at 25 s)");
+
+        Console.WriteLine("\n== One-second hotspot spike to 110 °C (no alert)");
+        var quiet = new AlertEngine();
+        int raised = 0;
+        quiet.Raised += _ => raised++;
+        for (t = 0; t <= 10; t++) quiet.ProcessGpu(Snap(t == 5 ? 110 : 85));
+        if (raised != 0) _failures++;
+        Console.WriteLine($"  {(raised == 0 ? "PASS" : "FAIL")}: {raised} alert(s)");
+
+        Console.WriteLine("\n== Hotspot hovers at 94.5 / 95.5 °C, then cools to 85 °C (hysteresis)");
+        var hover = new AlertEngine();
+        double? firedAt = null, clearedAt = null;
+        hover.Raised += a => { if (a.Key == "temp:hotspot") firedAt ??= t; };
+        hover.Cleared += k => { if (k == "temp:hotspot") clearedAt ??= t; };
+        for (t = 0; t <= 12; t++) hover.ProcessGpu(Snap(t % 2 == 0 ? 95.5 : 94.5));
+        int cooledFrom = t;
+        for (; t < 40; t++) hover.ProcessGpu(Snap(85));
+        pass = firedAt is not null && clearedAt == cooledFrom + o.ClearFrames - 1; // the 15th cool sample clears it
+        if (!pass) _failures++;
+        Console.WriteLine($"  {(pass ? "PASS" : "FAIL")}: warning at {firedAt?.ToString() ?? "never"} s, cleared at " +
+                          $"{clearedAt?.ToString() ?? "never"} s (cooled at {cooledFrom} s, needs {o.ClearFrames} cool samples)");
+
+        Console.WriteLine("\n== Hotspot reading lost (PawnIO unavailable) while critical: alert stays");
+        var lost = new AlertEngine();
+        bool cleared = false;
+        lost.Cleared += k => cleared |= k == "temp:hotspot";
+        for (t = 0; t < 5; t++) lost.ProcessGpu(Snap(108));
+        for (; t < 30; t++) lost.ProcessGpu(Snap(null));
+        pass = !cleared && lost.Active.Any(a => a.Key == "temp:hotspot" && a.Severity == AlertSeverity.Critical);
+        if (!pass) _failures++;
+        Console.WriteLine($"  {(pass ? "PASS" : "FAIL")}: {(pass ? "critical alert kept" : "alert cleared without a reading")}");
     }
 
     private static void HotspotDecodeCheck()

@@ -57,6 +57,7 @@ public partial class App : Application
             minimized = false; // an error with no visible window would be invisible
         }
         _window.Closed += (_, _) => Notifications.Unregister();
+        _ = Task.Run(Autostart.MigrateIfElevated); // old Run-key entry -> elevated logon task
         if (!minimized) _window.Activate();
     }
 

@@ -67,6 +67,13 @@ public sealed record AlertOptions
     public double CriticalCoreTempC { get; init; } = 88;
     public double WarnMemoryTempC { get; init; } = 90;
     public double CriticalMemoryTempC { get; init; } = 100;
+    /// <summary>
+    /// RTX 50 hotspot (<see cref="GpuSnapshot.HotspotC"/>, read through PawnIO). Placeholders until
+    /// load-tested on this card: hotspot typically runs 10-20 °C above core, so these sit roughly
+    /// that far above the core thresholds.
+    /// </summary>
+    public double WarnHotspotTempC { get; init; } = 95;
+    public double CriticalHotspotTempC { get; init; } = 105;
 }
 
 /// <summary>
@@ -193,6 +200,7 @@ public sealed class AlertEngine
             }
             Check("temp:core", s.CoreTempC, o.WarnCoreTempC, o.CriticalCoreTempC, "GPU core");
             Check("temp:memory", s.MemoryTempC, o.WarnMemoryTempC, o.CriticalMemoryTempC, "GPU memory");
+            Check("temp:hotspot", s.HotspotC, o.WarnHotspotTempC, o.CriticalHotspotTempC, "GPU hotspot");
         }
     }
 
