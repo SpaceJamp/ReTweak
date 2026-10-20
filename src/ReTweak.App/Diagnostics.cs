@@ -59,7 +59,7 @@ public static class Diagnostics
     /// <summary>Everything about the machine and ReTweak's setup that helps explain a log.</summary>
     public static object Describe(GpuMonitor? monitor, AppSettings settings) => new
     {
-        retweak = typeof(Diagnostics).Assembly.GetName().Version?.ToString(),
+        retweak = BuildInfo.Full,
         exe = System.Environment.ProcessPath,
         args = System.Environment.GetCommandLineArgs().Skip(1),
         os = System.Environment.OSVersion.VersionString,
@@ -113,7 +113,7 @@ public static class Diagnostics
         // in the user's profile. The zip itself is created new (never through an existing file or link).
         if (!TrustedPaths.IsAllowedUserFolder(desktop))
             throw new UnauthorizedAccessException($"The Desktop ({desktop}) isn't a plain folder in your profile; not writing there as administrator.");
-        string zipPath = Path.Combine(desktop, $"ReTweak-diagnostics-{DateTime.Now:yyyyMMdd-HHmmss}.zip");
+        string zipPath = Path.Combine(desktop, $"ReTweak-diagnostics-{BuildInfo.Version}-b{BuildInfo.Build}-{DateTime.Now:yyyyMMdd-HHmmss}.zip");
         using var zip = ZipFile.Open(zipPath, ZipArchiveMode.Create);
 
         var summary = zip.CreateEntry("environment.json");

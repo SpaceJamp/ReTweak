@@ -11,6 +11,7 @@ using ReTweak.Core;
 // ReTweak.Cli --fan <pct>|curve|smart [--duration secs]   drive the fans until Ctrl+C, then hand them back (admin)
 // ReTweak.Cli --fan auto      hand the fans back to the driver (e.g. after a crash) (admin)
 // add --debug to any of these for a full diagnostic log
+// ReTweak.Cli --version          version and build number
 // ReTweak.Cli --security-check   audit ReTweak's files, autostart, PawnIO, data folders and Windows protections
 
 // --debug: full diagnostic log (JSON lines) to %LocalAppData%\ReTweak\diagnostics, like the app's --debug.
@@ -29,6 +30,12 @@ if (args.Contains("--debug"))
     Diag.Info(DiagCategory.App, "cli started", new { args, admin = Environment.IsPrivilegedProcess });
     AppDomain.CurrentDomain.ProcessExit += (_, _) => Diag.Shutdown();
     if (diagFolder.Length > 0) Console.WriteLine($"Diagnostic log: {diagFolder}");
+}
+
+if (args.Contains("--version"))
+{
+    Console.WriteLine($"ReTweak {BuildInfo.Display}");
+    return;
 }
 
 if (args.Contains("--security-check"))
@@ -90,7 +97,7 @@ if (args.Contains("--alerts"))
 }
 
 bool watch = args.Contains("--watch");
-Console.WriteLine($"Driver {monitor.DriverVersion}");
+Console.WriteLine($"ReTweak {BuildInfo.Display} · driver {monitor.DriverVersion}");
 // The hotspot is sampled at 10 Hz and averaged over a second: give the window time to fill.
 if (monitor.Gpus.Any(g => monitor.HasHotspot(g.Index))) Thread.Sleep(GpuMonitor.HotspotWindow);
 do
