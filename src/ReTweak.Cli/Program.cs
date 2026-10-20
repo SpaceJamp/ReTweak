@@ -174,10 +174,17 @@ static void RunAlerts(GpuMonitor monitor, string[] args)
     StreamWriter? gpuLog = null;
     if (logIdx >= 0 && logIdx + 1 < args.Length)
     {
+        const string header = "time,board_w,limit_w,temp_c,core_mhz,mem_mhz,load_pct,mem_temp_c,hotspot_c,hotspot_max_c";
         string gpuPath = Path.ChangeExtension(args[logIdx + 1], ".gpu.csv");
-        bool fresh = !File.Exists(gpuPath);
+        // An older log with different columns: start a new file rather than append rows that don't match its header.
+        if (File.Exists(gpuPath) && File.ReadLines(gpuPath).FirstOrDefault() is { } existing && existing != header)
+        {
+            gpuPath = Path.ChangeExtension(args[logIdx + 1], $".gpu.{DateTime.Now:yyyyMMdd-HHmmss}.csv");
+            Console.WriteLine($"{Path.GetFileName(Path.ChangeExtension(args[logIdx + 1], ".gpu.csv"))} has older columns; writing {Path.GetFileName(gpuPath)} instead.");
+        }
+        bool fresh = !File.Exists(gpuPath) || new FileInfo(gpuPath).Length == 0;
         gpuLog = new StreamWriter(gpuPath, append: true) { AutoFlush = true };
-        if (fresh) gpuLog.WriteLine("time,board_w,limit_w,temp_c,core_mhz,mem_mhz,load_pct,mem_temp_c,hotspot_c,hotspot_max_c");
+        if (fresh) gpuLog.WriteLine(header);
     }
 
     Console.WriteLine($"Monitoring {gpu.Name} connector. Ctrl+C to stop." + (log is null ? "" : " Logging to CSV.") +

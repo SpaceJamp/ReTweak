@@ -11,7 +11,7 @@ going wrong.
 - **GPU hotspot on RTX 50**, optional: needs the PawnIO driver (see [below](#gpu-hotspot-and-pawnio))
 - **Temperatures**: precise core (0.01 °C) and memory on RTX 50; on ASUS cards, memory comes from the
   board sensors GPU Tweak III uses, plus 8 board sensors (VRM, core, memory and more)
-- Early-warning alerts: pin over-current, low/high voltage, pin-to-pin voltage spread, current imbalance, fast voltage drops or current ramps, frozen sensor, high core or memory temperature
+- Early-warning alerts: pin over-current, low/high voltage, pin-to-pin voltage spread, current imbalance, fast voltage drops or current ramps, frozen sensor, high core, memory or hotspot temperature
 - **Fan control**: Auto (driver) with a safety net, a fixed speed, or a 5-point curve (drag the points
   on the dashboard, or pick Quiet / Balanced / Performance). The curve can follow the core, hotspot,
   memory or the hottest of them; speed changes are ramped and the temperature averaged so the fans don't
@@ -20,7 +20,7 @@ going wrong.
   when the hotspot or memory gets too hot, or the hotspot runs far ahead of the core (poor cooler contact)
 - Native Windows notifications for alerts
 - Runs in the notification area: closing the window keeps monitoring; the tray icon shows the worst active alert
-- Optional start with Windows (`--minimized`, tray only), CSV logging and adjustable thresholds in Settings
+- Optional start with Windows as administrator (`--minimized`, tray only; see below), CSV logging and adjustable thresholds in Settings
   (stored in `%LocalAppData%\ReTweak\settings.json`)
 
 Monitoring is read-only. The one thing ReTweak writes to the GPU is fan speed: always in Fixed
@@ -28,7 +28,7 @@ and Curve, and in Auto only when the safety net steps in (hotspot or memory too 
 it off in Settings). All of these need ReTweak to run as administrator:
 
 - It uses NVML's documented fan calls and needs administrator rights (the dashboard offers
-  *Restart as administrator*). Start with Windows runs unelevated, so the fans stay on Auto there.
+  *Restart as administrator*). Start with Windows starts it elevated (see below).
 - Switching to Auto, exiting, losing the temperature reading for 3 s or a failed write hands
   the fans back to the driver's own curve. At the failsafe temperature (88 °C by default)
   the fans go to 100%.
@@ -102,6 +102,22 @@ publishes new data about every 600 ms, which sets the alert latency.
 | Sensor frozen or not responding | 10 s without new data / 10 failed reads | | |
 | GPU core temperature | 83 °C | 88 °C | ~3 s / ~2 s |
 | Memory temperature | 90 °C | 100 °C | ~3 s / ~2 s |
+| GPU hotspot (RTX 50, PawnIO) | 95 °C | 105 °C | ~3 s / ~2 s |
+
+The hotspot thresholds are placeholders until load-tested on this card.
+
+## Start with Windows
+
+Settings → *Start with Windows* registers a Task Scheduler task named `ReTweak` that runs
+`ReTweak.exe --minimized` at logon for your account with highest privileges, so ReTweak starts
+elevated (needed for the hotspot) without a UAC prompt each time. It runs on battery too.
+Creating or removing the task needs administrator rights once: if ReTweak isn't running as
+administrator, Windows asks when you save. Check it with `schtasks /Query /TN ReTweak`.
+
+Older versions used the `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` key, which can't
+start an elevated app. ReTweak moves such an entry to the task the next time it runs as administrator,
+or when you save Settings. If you move ReTweak to another folder, open Settings and save to point the
+task at the new location.
 
 ## License
 
