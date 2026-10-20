@@ -14,7 +14,7 @@ going wrong.
 - **Early-warning alerts**: pin over-current, low/high voltage, pin-to-pin voltage spread, current imbalance, fast voltage drops or current ramps, frozen sensor, high core, memory or hotspot temperature
 - **Fan control**: **Auto** is ReTweak's own controller. It works out what you're doing (idle, desktop,
   video, gaming, rendering/AI/encoding) from GPU, video-engine and memory load, how power swings and the
-  foreground app, and holds a target per activity (60-70 °C hotspot by default) under a **75 °C ceiling**.
+  foreground app, and holds a target per activity (60-70 °C hotspot by default) under an **80 °C ceiling**.
   Every sensor votes against its own limit (hotspot and its 4 sensors, core, memory or each memory chip,
   ASUS VRMs) and the one closest to its limit sets the speed; a rising load is projected a few seconds
   ahead, and it learns how much airflow your card needs at each power level. With PawnIO it sees the

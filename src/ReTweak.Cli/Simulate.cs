@@ -557,7 +557,7 @@ static class Simulate
     private static PlantRun RunPlant(FanOptions o, Func<int, double> watts, int seconds, double startC = 50, int driverSpeed = 30,
                                      bool hasHotspot = true, bool refuse = false, Func<int, ActivitySample>? activity = null,
                                      Func<int, double, int, double?>? memoryChips = null, double cooling = 1,
-                                     IReadOnlyList<double>? airflow = null)
+                                     IReadOnlyList<double>? airflow = null, double peakSpread = 1)
     {
         const double ambient = 30, heatCapacity = 150, powerLimit = 400;
         var fake = new FakeFans { DriverSpeed = driverSpeed, Refuse = refuse ? "needs administrator rights" : null };
@@ -574,7 +574,8 @@ static class Simulate
             hot += (w - conductance * (hot - ambient)) / heatCapacity;
             double noisy = hot + (rng.NextDouble() - 0.5) * 3;
             fake.Now += TimeSpan.FromSeconds(1);
-            run.Statuses.Add(fc.Tick(new FanTemps(hot - 7, hasHotspot ? noisy : null, null, hasHotspot ? noisy + 1 : null, w / powerLimit,
+            double peak = noisy + rng.NextDouble() * peakSpread; // the 1 s peak runs above the average by 0..spread °C
+            run.Statuses.Add(fc.Tick(new FanTemps(hot - 7, hasHotspot ? noisy : null, null, hasHotspot ? peak : null, w / powerLimit,
                                                   MemoryChipMaxC: memoryChips?.Invoke(t, hot, fan), Activity: activity?.Invoke(t))));
             run.HotspotC.Add(hot);
             run.FanPercent.Add(fake.Speed ?? driverSpeed);
@@ -666,9 +667,9 @@ static class Simulate
             Check("Another program changing the fans every other tick is reported", st.Text.Contains("another program"), st.Text);
         }
 
-        Check("New installs default to Auto (smart) under a 75 °C ceiling",
-              new FanOptions().Mode == FanMode.Smart && new FanOptions().Validate() is null && new FanOptions().CeilingC == 75
-              && FanOptions.DefaultActivities.Values.All(p => p.TargetHotspotC < 75),
+        Check("New installs default to Auto (smart) under an 80 °C ceiling",
+              new FanOptions().Mode == FanMode.Smart && new FanOptions().Validate() is null && new FanOptions().CeilingC == 80
+              && FanOptions.DefaultActivities.Values.All(p => p.TargetHotspotC < 80),
               $"default mode {new FanOptions().Mode}");
     }
 
@@ -728,14 +729,25 @@ static class Simulate
         Check($"Auto during a render holds the Compute target ({cTarget:F0} °C)", renderErr <= 2.5 && render.Statuses[^1].Activity == ActivityKind.Compute,
               $"within {renderErr:F1} °C of {cTarget:F0}; {render.Statuses[^1].Text}");
 
-        // The ceiling: a heavy load with peaks that would otherwise cross 75 °C.
-        var heavy = RunPlant(auto, t => 360 + 50 * Math.Sin(t / 9.0), 600, startC: 60, activity: Game);
+        // The ceiling: a heavy load whose swings would otherwise carry the hotspot over it.
+        var tight = auto with { CeilingC = 75 };
+        var heavy = RunPlant(tight, t => 360 + 50 * Math.Sin(t / 9.0), 600, startC: 60, activity: Game);
         double heavyPeak = heavy.HotspotC.Skip(150).Max();
-        Check("Auto keeps the hotspot under the 75 °C ceiling through load spikes", heavyPeak < 75,
+        Check("Auto keeps the hotspot under a 75 °C ceiling through load spikes", heavyPeak < 75,
               $"peak {heavyPeak:F1} °C, fans up to {heavy.FanPercent.Skip(150).Max()}%");
-        var tooMuch = RunPlant(auto, _ => 560, 400, startC: 70, activity: Game);
-        Check("Auto says so when even full fans can't hold the ceiling", tooMuch.Statuses[^1].Text.Contains("ceiling") && tooMuch.Statuses[^1].Severity == AlertSeverity.Warning,
-              $"{tooMuch.HotspotC[^1]:F1} °C at {tooMuch.FanPercent[^1]}%: {tooMuch.Statuses[^1].Text}");
+        var tooMuch = RunPlant(tight, _ => 560, 400, startC: 70, activity: Game, peakSpread: 6);
+        int flips = tooMuch.Statuses.Skip(100).Zip(tooMuch.Statuses.Skip(101)).Count(x => x.First.Severity != x.Second.Severity);
+        Check("Auto says so (steadily) when even full fans can't hold the ceiling",
+              tooMuch.Statuses[^1].Text.Contains("ceiling") && tooMuch.Statuses[^1].Severity == AlertSeverity.Warning && flips == 0,
+              $"{tooMuch.HotspotC[^1]:F1} °C at {tooMuch.FanPercent[^1]}%, warning flickered {flips} times: {tooMuch.Statuses[^1].Text}");
+
+        // From the game log (2026-10-20): Gaming near both its target and the ceiling, with the 1 s peak jumping
+        // several degrees. Steering the ceiling on that peak made the fans hunt 67-96%.
+        var near = RunPlant(auto with { CeilingC = 75 }, _ => 310, 500, startC: 68, activity: Game, peakSpread: 6);
+        var held = near.FanPercent.Skip(300).ToList();
+        Check("Auto doesn't hunt near the ceiling when the hotspot peak is jumpy",
+              held.Max() - held.Min() <= 15 && near.HotspotC.Skip(300).Max() < 75,
+              $"fans {held.Min()}-{held.Max()}% over the last 200 s (game log before the fix: 67-96%), hotspot peak {near.HotspotC.Skip(300).Max():F1} °C");
 
         // ---- every sensor votes: hot memory chips take over while the hotspot looks fine ----
         double? HotChips(int t, double hotC, int fan) => 70 + t * 0.12 - (fan - 30) * 0.25; // VRAM heating faster than the airflow keeps up

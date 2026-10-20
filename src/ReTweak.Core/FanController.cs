@@ -82,10 +82,11 @@ public sealed record FanOptions
     /// <summary>Used when there's no hotspot (no PawnIO): the core runs a few degrees below the hotspot.</summary>
     public double SmartTargetCoreC { get; init; } = 62;
     /// <summary>
-    /// Auto pushes hard to keep the hotspot's 1 s peak under this (core: 8 °C lower without a hotspot),
+    /// Auto pushes hard to keep the hotspot's 1 s average (the value the dashboard shows) under this (core: 8 °C
+    /// lower without a hotspot),
     /// whatever the activity. 0 turns it off. At full load this can need fans near 100%.
     /// </summary>
-    public double CeilingC { get; init; } = 75;
+    public double CeilingC { get; init; } = 80;
     public SmartPriority SmartPriority { get; init; } = SmartPriority.Balanced;
     /// <summary>Hand the fans to the driver well below the target at low load, so they can stop (0 RPM).</summary>
     public bool SmartIdleStop { get; init; }
@@ -98,7 +99,7 @@ public sealed record FanOptions
 
     public static IReadOnlyDictionary<ActivityKind, ActivityProfile> DefaultActivities { get; } = new Dictionary<ActivityKind, ActivityProfile>
     {
-        // All under the default 75 °C ceiling, with room for load spikes.
+        // All under the default 80 °C ceiling, with room for load spikes.
         [ActivityKind.Idle] = new(60, SmartPriority.Quiet, 0),
         [ActivityKind.Desktop] = new(62, SmartPriority.Quiet, 0),
         [ActivityKind.Video] = new(62, SmartPriority.Quiet, 0),
@@ -263,6 +264,8 @@ public sealed class FanController : IDisposable
     private readonly Queue<double> _powerTrend = new(); // last few power readings, for look-ahead
     private int _stableTicks;        // consecutive ticks on target, for learning
     private double _leadHold;        // projected power, fading out after a ramp
+    private int _ceilingTicks;       // + seconds over the ceiling at full fans, - seconds under it
+    private bool _ceilingWarning;
 
     /// <summary>Airflow the card needs per power level, learned in Auto; persist it with <see cref="AirflowModel.Corrections"/>.</summary>
     public AirflowModel Airflow { get; } = new();
@@ -447,8 +450,11 @@ public sealed class FanController : IDisposable
         Vote("memory", t.MemoryC, o.MemoryTargetC, o.FailsafeMemoryC);
         Vote("memory chips", t.MemoryChipMaxC, o.MemoryChipTargetC, o.MemoryChipLimitC);
         Vote("VRM", t.VrmMaxC, o.VrmTargetC, o.VrmLimitC);
-        // The ceiling: starts pushing 3 °C below it and counts as being at a limit when the peak reaches it.
-        double? ceilingInput = input == "hotspot" ? t.HotspotPeakC : t.CoreC;
+        // The ceiling: starts pushing 3 °C below it and counts as being at a limit when the hotspot reaches it.
+        // Measured on the 1 s average, not the peak: the peak jumps ~±4 °C second to second, and steering on it
+        // made the fans hunt between ~67% and 96% in a real game (diagnostic log, 2026-10-20). Failsafes still
+        // use the peak.
+        double? ceilingInput = input == "hotspot" ? t.HotspotC : t.CoreC;
         double ceiling = input == "hotspot" ? o.CeilingC : o.CeilingC - 8;
         if (o.CeilingC > 0) Vote($"{input} ceiling", ceilingInput, ceiling - 3, ceiling);
         var steer = votes.MaxBy(v => v.Error);
@@ -534,7 +540,13 @@ public sealed class FanController : IDisposable
         if (_overrides >= OverridesBeforeWarning)
             return Status = new(FanMode.Smart, _applied, $"Auto {_applied}%, but another program keeps changing the fans. Close other fan tools.",
                                 AlertSeverity.Warning, SourceTempC: temp, Activity: activity);
-        if (o.CeilingC > 0 && _applied >= _range.Max && ceilingInput > ceiling)
+        // "Can't hold the ceiling" with hysteresis: 3 s over at full fans to say so, 3 s under to stop.
+        bool overAtMax = o.CeilingC > 0 && _applied >= _range.Max && ceilingInput > ceiling;
+        bool underCeiling = !(ceilingInput > ceiling - 0.5);
+        _ceilingTicks = overAtMax ? Math.Max(1, _ceilingTicks + 1) : underCeiling ? Math.Min(-1, _ceilingTicks - 1) : _ceilingTicks;
+        if (_ceilingTicks >= 3) _ceilingWarning = true;
+        else if (_ceilingTicks <= -3) _ceilingWarning = false;
+        if (_ceilingWarning)
             return Status = new(FanMode.Smart, _applied, $"Auto · {what}fans at maximum and {input} {ceilingInput:F0} °C is still over the {ceiling:F0} °C ceiling",
                                 AlertSeverity.Warning, SourceTempC: temp, Activity: activity, Steering: steer.Name);
         return Status = new(FanMode.Smart, _applied, $"Auto · {what}{_applied}% · {steer.Name} {steer.Value:F1} °C → {steer.Target:F0} °C",
