@@ -83,9 +83,9 @@ public sealed record FanOptions
             if (i > 0 && p.Percent < Curve[i - 1].Percent) return $"Curve point {i + 1}: fan speed can't drop as temperature rises.";
         }
         if (HysteresisC is < 0 or > 10) return "Hysteresis must be 0-10 °C.";
-        if (FailsafeTempC is < 60 or > 110) return "Core failsafe must be 60-110 °C.";
-        if (FailsafeHotspotC is < 60 or > 125) return "Hotspot failsafe must be 60-125 °C.";
-        if (FailsafeMemoryC is < 60 or > 125) return "Memory failsafe must be 60-125 °C.";
+        if (FailsafeTempC is < 40 or > 110) return "Core failsafe must be 40-110 °C.";
+        if (FailsafeHotspotC is < 40 or > 125) return "Hotspot failsafe must be 40-125 °C.";
+        if (FailsafeMemoryC is < 40 or > 125) return "Memory failsafe must be 40-125 °C.";
         if (ZeroRpmBelowC is < 25 or > 80) return "Zero RPM threshold must be 25-80 °C.";
         double sourceFailsafe = Source switch
         {
@@ -97,8 +97,7 @@ public sealed record FanOptions
         if (ZeroRpm && ZeroRpmBelowC >= sourceFailsafe) return "Zero RPM threshold must be below the failsafe for the curve's input.";
         if (RampUpPerSecond is < 0 or > 100 || RampDownPerSecond is < 0 or > 100) return "Ramp rates must be 0-100 %/s.";
         if (SmoothingSeconds is < 0 or > 30) return "Temperature smoothing must be 0-30 s.";
-        if (AssistHotspotC >= FailsafeHotspotC || AssistMemoryC >= FailsafeMemoryC)
-            return "Safety-net thresholds must be below the failsafes.";
+        // A failsafe at or below a safety-net threshold is fine: full speed simply arrives first.
         if (AssistHotspotC < 50 || AssistMemoryC < 50) return "Safety-net thresholds must be at least 50 °C.";
         if (AssistGapC is < 5 or > 60) return "Hotspot-to-core gap must be 5-60 °C.";
         if (AssistReleaseMarginC is < 1 or > 20) return "Safety-net release margin must be 1-20 °C.";

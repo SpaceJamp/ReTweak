@@ -428,6 +428,8 @@ static class Simulate
         var presets = FanOptions.Presets.Select(p => (p.Key, Problem: new FanOptions { Curve = p.Value }.Validate())).ToList();
         Check("Presets are valid curves", presets.All(p => p.Problem is null), string.Join(", ", presets.Select(p => $"{p.Key} {p.Problem ?? "ok"}")));
         Check("Default fan settings are valid", new FanOptions().Validate() is null, new FanOptions().Validate() ?? "ok");
+        var lowered = new FanOptions { FailsafeTempC = 75, FailsafeHotspotC = 85, FailsafeMemoryC = 80 }.Validate();
+        Check("Lowered failsafes (core 75, hotspot 85, memory 80 °C) can be saved", lowered is null, lowered ?? "accepted");
 
         // ---- Hotspot window: average to show, peak for safety ----
         fake = new FakeFans();
