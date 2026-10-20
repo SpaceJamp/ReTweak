@@ -55,6 +55,7 @@ static class Simulate
         DieSpreadCheck();
         FanCheck();
         SmartCheck();
+        HardeningCheck();
         AdaptiveCheck();
         TrustedPathsCheck();
 
@@ -625,6 +626,58 @@ static class Simulate
             run.FanPercent.Add(fake.Speed ?? driverSpeed);
         }
         return run with { Airflow = fc.Airflow.Corrections.ToArray() };
+    }
+
+    /// <summary>Failure handling found in the 2026-10-20 sweep.</summary>
+    private static void HardeningCheck()
+    {
+        var smart = new FanOptions { Mode = FanMode.Smart, AdaptToActivity = false };
+
+        // A power fraction of NaN (0 W limit) used to stick in the look-ahead and integral for good.
+        var fake = new FakeFans();
+        using (var fc = fake.Make(smart, range: (30, 100)))
+        {
+            for (int t = 0; t < 30; t++) { fake.Now += TimeSpan.FromSeconds(1); fc.Tick(new FanTemps(60, 75, 50, 76, double.NaN)); }
+            int hot = fake.Speed ?? 0;
+            bool finite = fc.Airflow.Corrections.All(double.IsFinite);
+            Check("Auto: an unreadable power limit (NaN) counts as moderate load, nothing gets poisoned", hot > 30 && finite,
+                  $"fans {hot}% at hotspot 75 °C (target 70), learned table finite: {finite}");
+        }
+
+        var model = new AirflowModel();
+        model.Load([.. Enumerable.Repeat(double.NaN, AirflowModel.Buckets)]);
+        Check("A damaged airflow.json (NaN) loads as zeros", model.Corrections.All(c => c == 0) && double.IsFinite(model.Estimate(0.5)),
+              $"estimate at 50% power {model.Estimate(0.5):F1}%");
+
+        // One failed write (a driver reset) used to stop fan control for the rest of the session.
+        var flaky = new FakeFans { Refuse = "GPU is lost" };
+        using (var fc = flaky.Make(new FanOptions { Mode = FanMode.Fixed, FixedPercent = 60 }))
+        {
+            var st1 = flaky.Tick(fc, 50);
+            flaky.Refuse = null;
+            for (int t = 0; t < 10; t++) flaky.Tick(fc, 50);
+            bool stillOff = flaky.Speed is null;
+            for (int t = 0; t < 25; t++) flaky.Tick(fc, 50);
+            Check($"A failed write is retried after {FanController.BlockedRetry.TotalSeconds:F0} s", st1.Percent is null && stillOff && flaky.Speed == 60,
+                  $"after the failure: {(stillOff ? "driver" : "manual")} at 10 s, {flaky.Speed?.ToString() ?? "driver"}% at 36 s");
+        }
+        var denied = new FakeFans { Refuse = "needs administrator rights" };
+        using (var fc = denied.Make(new FanOptions { Mode = FanMode.Fixed, FixedPercent = 60 }))
+        {
+            for (int t = 0; t < 40; t++) denied.Tick(fc, 50);
+            Check("A permission error isn't retried (it won't fix itself)", denied.Writes == 1, $"{denied.Writes} write attempt(s) in 40 s");
+        }
+
+        // A tick that throws in the app hands the fans back.
+        var held = new FakeFans();
+        using (var fc = held.Make(new FanOptions { Mode = FanMode.Fixed, FixedPercent = 70 }))
+        {
+            for (int t = 0; t < 5; t++) held.Tick(fc, 50); // ramps up from the driver's speed
+            int before = held.Speed ?? 0;
+            fc.ReleaseToDriver();
+            Check("ReleaseToDriver gives a held speed back to the driver", before == 70 && held.Speed is null && held.Restores == 1,
+                  $"{before}% -> {(held.Speed is null ? "driver" : held.Speed + "%")}");
+        }
     }
 
     private static int SpeedChanges(IEnumerable<int> fan) => fan.Zip(fan.Skip(1)).Count(x => x.First != x.Second);

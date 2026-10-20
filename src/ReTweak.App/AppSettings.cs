@@ -22,15 +22,47 @@ public sealed record AppSettings
     public DiagLevel DiagnosticsLevel { get; init; } = DiagLevel.Off;
     public string LogFolder { get; init; } = Path.Combine(Folder, "logs");
 
+    /// <summary>What <see cref="Load"/> had to replace with defaults, for the diagnostic log (it runs before logging starts).</summary>
+    public static IReadOnlyList<string> LoadProblems { get; private set; } = [];
+
     public static AppSettings Load()
     {
         try
         {
             if (File.Exists(FilePath))
-                return JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(FilePath), Json) ?? new();
+                return Checked(JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(FilePath), Json) ?? new());
         }
-        catch (Exception) { /* corrupt or unreadable: fall back to defaults rather than refuse to monitor */ }
+        catch (Exception ex) { LoadProblems = [$"settings.json unreadable, using defaults: {ex.Message}"]; } // rather than refuse to monitor
         return new();
+    }
+
+    /// <summary>
+    /// The same checks the Settings dialog applies, on what was read from disk. settings.json can be edited
+    /// (or damaged) outside ReTweak, and the elevated app drives the fans from it: a failsafe at 1000 °C or
+    /// an empty curve must not be trusted. A section that fails falls back to its defaults.
+    /// </summary>
+    internal static AppSettings Checked(AppSettings s)
+    {
+        var problems = new List<string>();
+        var fans = s.Fans;
+        string? fanProblem;
+        try { fanProblem = fans is null || fans.Curve is null || fans.Activities is null ? "missing" : fans.Validate(); }
+        catch (Exception ex) { fanProblem = ex.Message; }
+        if (fanProblem is not null)
+        {
+            problems.Add($"fan settings reset to defaults: {fanProblem}");
+            fans = new FanOptions();
+        }
+        var alerts = s.Alerts;
+        string? alertProblem = alerts is null ? "missing" : Validate(alerts);
+        if (alertProblem is not null)
+        {
+            problems.Add($"alert thresholds reset to defaults: {alertProblem}");
+            alerts = new AlertOptions();
+        }
+        string logFolder = string.IsNullOrWhiteSpace(s.LogFolder) ? new AppSettings().LogFolder : s.LogFolder;
+        LoadProblems = problems;
+        return s with { Fans = fans ?? new(), Alerts = alerts ?? new(), LogFolder = logFolder };
     }
 
     public void Save()

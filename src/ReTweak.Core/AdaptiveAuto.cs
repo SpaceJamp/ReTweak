@@ -146,7 +146,8 @@ public sealed class AirflowModel
     public void Load(IReadOnlyList<double>? saved)
     {
         if (saved is null || saved.Count != Buckets) return;
-        for (int i = 0; i < Buckets; i++) _correction[i] = Math.Clamp(saved[i], -MaxCorrection, MaxCorrection);
+        // A damaged file (NaN, ∞) must not poison every estimate: such entries are relearned from zero.
+        for (int i = 0; i < Buckets; i++) _correction[i] = double.IsFinite(saved[i]) ? Math.Clamp(saved[i], -MaxCorrection, MaxCorrection) : 0;
     }
 
     /// <summary>Fan % the card needs at this power, before temperature feedback.</summary>

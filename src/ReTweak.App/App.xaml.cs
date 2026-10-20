@@ -46,6 +46,7 @@ public partial class App : Application
         var settings = AppSettings.Load();
         Diagnostics.Apply(settings.DiagnosticsLevel); // before anything else, so startup problems are logged
         Diagnostics.HookCrashes(this);
+        foreach (var problem in AppSettings.LoadProblems) Diag.Warn(DiagCategory.Settings, problem);
         Notifications.Register();
         GpuMonitor? monitor = null;
         try

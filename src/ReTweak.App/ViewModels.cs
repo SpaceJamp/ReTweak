@@ -336,7 +336,13 @@ public sealed partial class MainViewModel : Observable, IDisposable
             st = _fan.Tick(new FanTemps(s.CoreTempC, s.HotspotC, s.MemoryTempC, s.HotspotMaxC, s.PowerWatts / s.PowerLimitWatts,
                                         s.MemoryChipMaxC, s.VrmMaxC, activity));
         }
-        catch (Exception ex) { st = new(_fan.Options.Mode, null, $"Fan control error: {ex.Message}", AlertSeverity.Warning); }
+        catch (Exception ex)
+        {
+            // Nothing is controlling the fans now: give them to the driver rather than leave a manual speed.
+            Diag.Error(DiagCategory.Fan, "fan control tick failed", ex);
+            _fan.ReleaseToDriver();
+            st = new(_fan.Options.Mode, null, $"Fan control error: {ex.Message}. The driver has the fans.", AlertSeverity.Warning);
+        }
         FanTempC = st.SourceTempC ?? s.CoreTempC;
         // Unelevated, Auto is simply the driver's curve; mention the safety net quietly instead of
         // nagging with the restart button (that's for Fixed and Curve, which can't work at all).

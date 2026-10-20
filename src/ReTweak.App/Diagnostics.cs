@@ -124,10 +124,13 @@ public static class Diagnostics
             w.Write(SecurityCheck.Format(RunSecurityCheck(settings)));
 
         foreach (var file in Diag.LogFiles(Folder).Take(Diag.MaxFiles)) AddShared(zip, file, "diagnostics/" + Path.GetFileName(file));
+        // Both folders are the user's to change: elevated, only copy from plain folders in their profile, so a
+        // junction or a planted log folder can't make ReTweak copy files only administrators can read into a
+        // zip the user can open.
         string settingsFile = Path.Combine(AppSettings.Folder, "settings.json");
-        if (File.Exists(settingsFile)) AddShared(zip, settingsFile, "settings.json");
-        if (Directory.Exists(settings.LogFolder))
-            foreach (var csv in Directory.GetFiles(settings.LogFolder, "*.csv").OrderByDescending(File.GetLastWriteTime).Take(2))
+        if (File.Exists(settingsFile) && TrustedPaths.IsAllowedUserFolder(AppSettings.Folder)) AddShared(zip, settingsFile, "settings.json");
+        if (Directory.Exists(settings.LogFolder) && TrustedPaths.IsAllowedUserFolder(settings.LogFolder))
+            foreach (var csv in Directory.GetFiles(settings.LogFolder, "retweak-*.csv").OrderByDescending(File.GetLastWriteTime).Take(2))
                 AddShared(zip, csv, "connector-logs/" + Path.GetFileName(csv));
         return zipPath;
     }
@@ -137,6 +140,7 @@ public static class Diagnostics
     {
         try
         {
+            if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0) return; // a link: could point anywhere
             using var src = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
             using var dst = zip.CreateEntry(name, CompressionLevel.Optimal).Open();
             src.CopyTo(dst);
