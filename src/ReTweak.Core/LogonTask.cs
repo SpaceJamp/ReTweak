@@ -34,11 +34,24 @@ public sealed partial class LogonTask(string name)
     /// <summary>Creates or replaces the task. Returns false if it couldn't (UAC declined, access denied).</summary>
     public bool Register(string exePath, string arguments, bool elevate, out string? error)
     {
-        string xml = Path.Combine(Path.GetTempPath(), $"{Name}-task-{Environment.ProcessId}.xml");
+        // The XML sits in the user's temp folder while an elevated schtasks reads it. Create it new under an
+        // unpredictable name and keep it open without write/delete sharing until schtasks is done, so nothing
+        // can swap its contents; then check that what got registered really is this program.
+        string xml = Path.Combine(Path.GetTempPath(), $"{Name}-task-{Guid.NewGuid():N}.xml");
         try
         {
-            File.WriteAllText(xml, Xml(exePath, arguments), Encoding.Unicode); // schtasks wants UTF-16 with a BOM
-            return Schtasks(["/Create", "/TN", Name, "/XML", xml, "/F"], elevate, out error);
+            using var hold = new FileStream(xml, FileMode.CreateNew, FileAccess.Write, FileShare.Read);
+            var bytes = Encoding.Unicode.GetPreamble().Concat(Encoding.Unicode.GetBytes(Xml(exePath, arguments))).ToArray(); // UTF-16 with a BOM
+            hold.Write(bytes);
+            hold.Flush(flushToDisk: true);
+            if (!Schtasks(["/Create", "/TN", Name, "/XML", xml, "/F"], elevate, out error)) return false;
+            if (Query() is not { } t || !string.Equals(t.Command, exePath, StringComparison.OrdinalIgnoreCase) || t.Arguments != arguments)
+            {
+                Remove(elevate, out _); // not what we asked for: don't leave it to run at highest privileges
+                error = "The registered task didn't match ReTweak, so it was removed.";
+                return false;
+            }
+            return true;
         }
         finally { try { File.Delete(xml); } catch (IOException) { } }
     }
@@ -64,7 +77,7 @@ public sealed partial class LogonTask(string name)
         try
         {
             // Output can't be redirected through a UAC prompt; the exit code is enough.
-            using var p = Process.Start(new ProcessStartInfo("schtasks.exe", Quote(args))
+            using var p = Process.Start(new ProcessStartInfo(TrustedPaths.SystemExe("schtasks.exe"), Quote(args))
             {
                 UseShellExecute = true,
                 Verb = "runas",
@@ -83,7 +96,7 @@ public sealed partial class LogonTask(string name)
 
     private static (int Code, string Output) Run(string[] args)
     {
-        var psi = new ProcessStartInfo("schtasks.exe")
+        var psi = new ProcessStartInfo(TrustedPaths.SystemExe("schtasks.exe")) // full path, never a PATH lookup
         {
             UseShellExecute = false,
             CreateNoWindow = true,

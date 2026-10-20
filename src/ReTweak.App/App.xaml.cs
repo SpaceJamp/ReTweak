@@ -68,6 +68,13 @@ public partial class App : Application
             Diag.Shutdown();
         };
         _ = Task.Run(Autostart.MigrateIfElevated); // old Run-key entry -> elevated logon task
+        if (Diag.IsOn(DiagLevel.Info))
+            _ = Task.Run(() =>
+            {
+                var findings = Diagnostics.RunSecurityCheck(settings);
+                Diag.Write(findings.Any(x => x.Status >= CheckStatus.Warn) ? DiagLevel.Warn : DiagLevel.Info, DiagCategory.App, "security check",
+                           findings.Where(x => x.Status != CheckStatus.Pass).Select(x => new { x.Area, x.Title, status = x.Status.ToString(), x.Detail }));
+            });
         if (!minimized) _window.Activate();
     }
 

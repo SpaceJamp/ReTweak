@@ -115,6 +115,9 @@ public sealed partial class MainWindow : Window
         if (saved is not null) ViewModel.Apply(saved);
     }
 
+    /// <summary>Opens pawnio.eu through Explorer, not ShellExecute in this (possibly elevated) process.</summary>
+    private void GetPawnIo_Click(object sender, RoutedEventArgs e) => TrustedPaths.OpenLink(new Uri("https://pawnio.eu/"));
+
     private void RestartElevated_Click(object sender, RoutedEventArgs e)
     {
         // Only exit once the UAC prompt was accepted; the elevated copy waits for this one to finish.
@@ -207,7 +210,7 @@ public sealed partial class MainWindow : Window
 
     // The fan chart is rebuilt only when its size, the settings or a drag change; the once-a-second
     // update just moves the "now" dot (rebuilding ~60 elements every second cost ~10% of a core).
-    private (double W, double H, FanOptions? Options)? _fanChartKey;
+    private (double W, double H, FanOptions? Options, ActivityKind Activity)? _fanChartKey;
     private Ellipse? _fanNowDot;
 
     private void DrawFanCurve()
@@ -218,7 +221,7 @@ public sealed partial class MainWindow : Window
         if (w <= 0 || h <= 0) return;
 
         var o = ViewModel.FanOptions;
-        var key = (w, h, (FanOptions?)o);
+        var key = (w, h, (FanOptions?)o, ViewModel.FanActivity); // the target line moves with the activity
         if (_dragCurve is null && _fanChartKey == key && _fanNowDot is not null)
         {
             PlaceNowDot(_fanNowDot, o);
@@ -301,9 +304,18 @@ public sealed partial class MainWindow : Window
 
         if (o.Mode == FanMode.Smart)
         {
-            // No curve: Auto finds the speed itself. Show the target it holds and its dead band.
-            var tune = FanOptions.SmartTuning.For(o.SmartPriority);
-            double target = o.SmartTargetHotspotC;
+            // No curve: Auto finds the speed itself. Show the target for the current activity, its dead band
+            // and the ceiling.
+            var activity = ViewModel.FanActivity;
+            var priority = activity != ActivityKind.Unknown && o.Activities.TryGetValue(activity, out var prof) ? prof.Priority : o.SmartPriority;
+            var tune = FanOptions.SmartTuning.For(priority);
+            double target = ViewModel.FanTargetC;
+            if (o.CeilingC > 0)
+                canvas.Children.Add(new Line
+                {
+                    X1 = X(o.CeilingC), X2 = X(o.CeilingC), Y1 = top, Y2 = bottom,
+                    Stroke = Theme.Critical, StrokeThickness = 1.5, StrokeDashArray = [4, 4],
+                });
             var band = new Rectangle
             {
                 Width = Math.Max(1, X(target + tune.DeadbandC) - X(target - tune.DeadbandC)), Height = h,
@@ -319,8 +331,10 @@ public sealed partial class MainWindow : Window
             });
             var t = new TextBlock
             {
-                Text = $"Auto holds the hotspot at {target:F0} °C ({o.SmartPriority}); without PawnIO, the core at {o.SmartTargetCoreC:F0} °C. " +
-                       "Fan speed follows load and corrects the remaining error.",
+                Text = (activity == ActivityKind.Unknown ? $"Auto holds the hotspot at {target:F0} °C ({priority})"
+                                                         : $"{activity}: Auto holds the hotspot at {target:F0} °C ({priority})") +
+                       (o.CeilingC > 0 ? $" and keeps it under {o.CeilingC:F0} °C (red line)." : ".") +
+                       " Every sensor votes; the one closest to its limit sets the speed.",
                 FontSize = 11, Foreground = label, TextWrapping = TextWrapping.Wrap, Width = Math.Max(0, X(target) - left - 12),
             };
             Canvas.SetLeft(t, left + 4);

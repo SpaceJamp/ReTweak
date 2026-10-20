@@ -31,6 +31,9 @@ public sealed class NvidiaHotspot : IDisposable
 {
     private const string ModuleResource = "ReTweak.Core.PawnIo.Nvidia.bin";
     private const string ReadFunction = "ioctl_read_thermal_registers";
+    private const string MemoryFunction = "ioctl_read_memory_temperatures";
+    /// <summary>The module reports up to 48 memory-chip sensors; unavailable ones are INT32_MIN.</summary>
+    public const int MemorySensorCount = 48;
     public const int ChannelCount = 6;
     /// <summary>Index of the channel that is the maximum of the four sensors (#5).</summary>
     public const int HotspotChannel = 4;
@@ -81,6 +84,18 @@ public sealed class NvidiaHotspot : IDisposable
     /// <summary>All six raw thermal channels, or null if the read failed.</summary>
     public long[]? ReadChannels() =>
         _pawnIo.Execute(ReadFunction, _pciAddress, ChannelCount) is { Length: ChannelCount } c ? c : null;
+
+    /// <summary>
+    /// Memory-chip temperatures (°C) from PawnIO's NVIDIA module (BAR0 + 0x900000 block; Ampere, Ada and
+    /// Blackwell). Only the sensors that report are returned; null if the call failed or none report.
+    /// </summary>
+    public int[]? ReadMemoryChips()
+    {
+        if (_pawnIo.Execute(MemoryFunction, _pciAddress, MemorySensorCount + 2) is not { Length: MemorySensorCount + 2 } r
+            || r[1] != MemorySensorCount) return null;
+        var temps = r.Skip(2).Select(v => unchecked((int)v)).Where(t => t != int.MinValue && t is > 0 and < 150).ToArray();
+        return temps.Length > 0 ? temps : null;
+    }
 
     /// <summary>
     /// The hotspot from one read: channel #5, or the hottest of sensors #1-#4 if #5 wasn't valid.

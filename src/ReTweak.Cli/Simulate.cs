@@ -54,6 +54,8 @@ static class Simulate
         HotspotDecodeCheck();
         FanCheck();
         SmartCheck();
+        AdaptiveCheck();
+        TrustedPathsCheck();
 
         Console.WriteLine(_failures == 0 ? "\nAll scenarios passed." : $"\n{_failures} scenario(s) FAILED.");
         return _failures;
@@ -546,37 +548,46 @@ static class Simulate
     /// the fans cools it. Calibrated so 300 W needs ~40% fan for an 80 °C hotspot and 30% fans let
     /// it reach ~90 °C, close to an RTX 5080 Astral. Readings get the hotspot's ±1.5 °C jitter.
     /// </summary>
-    private sealed record PlantRun(List<double> HotspotC, List<int> FanPercent, List<FanStatus> Statuses);
+    private sealed record PlantRun(List<double> HotspotC, List<int> FanPercent, List<FanStatus> Statuses, IReadOnlyList<double> Airflow);
 
+    /// <param name="activity">Load/foreground readings for activity detection each second (null: none).</param>
+    /// <param name="memoryChips">Memory-chip temperature given (second, hotspot, fan %), or null.</param>
+    /// <param name="cooling">Scales the fans' cooling: below 1 is a card/case needing more airflow than expected.</param>
+    /// <param name="airflow">A learned airflow table to start from (from an earlier run).</param>
     private static PlantRun RunPlant(FanOptions o, Func<int, double> watts, int seconds, double startC = 50, int driverSpeed = 30,
-                                     bool hasHotspot = true, bool refuse = false)
+                                     bool hasHotspot = true, bool refuse = false, Func<int, ActivitySample>? activity = null,
+                                     Func<int, double, int, double?>? memoryChips = null, double cooling = 1,
+                                     IReadOnlyList<double>? airflow = null)
     {
         const double ambient = 30, heatCapacity = 150, powerLimit = 400;
         var fake = new FakeFans { DriverSpeed = driverSpeed, Refuse = refuse ? "needs administrator rights" : null };
         var rng = new Random(42);
-        var run = new PlantRun([], [], []);
+        var run = new PlantRun([], [], [], []);
         double hot = startC;
         using var fc = fake.Make(o, range: (30, 100));
+        fc.Airflow.Load(airflow);
         for (int t = 0; t < seconds; t++)
         {
             double w = watts(t);
             int fan = fake.Speed ?? driverSpeed;
-            double conductance = 2 + 10 * fan / 100.0; // W per °C above ambient
+            double conductance = 2 + 10 * cooling * fan / 100.0; // W per °C above ambient
             hot += (w - conductance * (hot - ambient)) / heatCapacity;
             double noisy = hot + (rng.NextDouble() - 0.5) * 3;
             fake.Now += TimeSpan.FromSeconds(1);
-            run.Statuses.Add(fc.Tick(new FanTemps(hot - 7, hasHotspot ? noisy : null, null, hasHotspot ? noisy + 1 : null, w / powerLimit)));
+            run.Statuses.Add(fc.Tick(new FanTemps(hot - 7, hasHotspot ? noisy : null, null, hasHotspot ? noisy + 1 : null, w / powerLimit,
+                                                  MemoryChipMaxC: memoryChips?.Invoke(t, hot, fan), Activity: activity?.Invoke(t))));
             run.HotspotC.Add(hot);
             run.FanPercent.Add(fake.Speed ?? driverSpeed);
         }
-        return run;
+        return run with { Airflow = fc.Airflow.Corrections.ToArray() };
     }
 
     private static int SpeedChanges(IEnumerable<int> fan) => fan.Zip(fan.Skip(1)).Count(x => x.First != x.Second);
 
     private static void SmartCheck()
     {
-        var smart = new FanOptions { Mode = FanMode.Smart }; // hotspot target 80 °C, Balanced
+        // The controller's own behaviour at an 80 °C operating point (the defaults are lower now; the ceiling is off here).
+        var smart = new FanOptions { Mode = FanMode.Smart, SmartTargetHotspotC = 80, SmartTargetCoreC = 72, CeilingC = 0 };
 
         var steady = RunPlant(smart, _ => 300, 400);
         var tail = steady.HotspotC.Skip(240).ToList();
@@ -655,8 +666,157 @@ static class Simulate
             Check("Another program changing the fans every other tick is reported", st.Text.Contains("another program"), st.Text);
         }
 
-        Check("New installs default to Auto (smart)", new FanOptions().Mode == FanMode.Smart && new FanOptions().Validate() is null,
+        Check("New installs default to Auto (smart) under a 75 °C ceiling",
+              new FanOptions().Mode == FanMode.Smart && new FanOptions().Validate() is null && new FanOptions().CeilingC == 75
+              && FanOptions.DefaultActivities.Values.All(p => p.TargetHotspotC < 75),
               $"default mode {new FanOptions().Mode}");
+    }
+
+    private static void AdaptiveCheck()
+    {
+        // ---- activity detection ----
+        ActivityKind Feed(IEnumerable<ActivitySample> samples)
+        {
+            var c = new ActivityClassifier();
+            var last = ActivityKind.Unknown;
+            foreach (var s in samples) last = c.Update(s);
+            return last;
+        }
+        IEnumerable<ActivitySample> Repeat(int n, Func<int, ActivitySample> f) => Enumerable.Range(0, n).Select(f);
+        ActivitySample S(double gpu, double power, double dec = 0, double enc = 0, bool fs = false, string? app = null, double mem = 10) =>
+            new(gpu, mem, dec, enc, power, fs, app);
+
+        var cases = new (string Name, IEnumerable<ActivitySample> Stream, ActivityKind Expect)[]
+        {
+            ("idle desktop", Repeat(20, _ => S(1, 0.06)), ActivityKind.Idle),
+            ("browsing", Repeat(20, i => S(12 + i % 3, 0.12)), ActivityKind.Desktop),
+            ("video in a browser (decoder busy)", Repeat(20, _ => S(14, 0.14, dec: 22, app: "chrome")), ActivityKind.Video),
+            ("fullscreen game", Repeat(20, i => S(72 + i % 9, 0.6 + (i % 4) * 0.06, fs: true, app: "Cyberpunk2077")), ActivityKind.Gaming),
+            ("windowed game (power swings frame to frame)", Repeat(20, i => S(65 + i % 15, 0.5 + (i % 3) * 0.08, app: "eldenring")), ActivityKind.Gaming),
+            ("Blender render", Repeat(20, _ => S(97, 0.92, app: "blender")), ActivityKind.Compute),
+            ("steady 99% job, not fullscreen", Repeat(20, _ => S(99, 0.95, app: "someworker")), ActivityKind.Compute),
+            ("OBS encoding", Repeat(20, _ => S(30, 0.3, enc: 45, app: "explorer")), ActivityKind.Compute),
+        };
+        foreach (var (name, stream, expect) in cases)
+        {
+            var got = Feed(stream);
+            Check($"Activity: {name}", got == expect, $"detected {got}");
+        }
+
+        // A loading screen in the middle of a game must not drop to Desktop; a real exit does, after 15 s.
+        var cls = new ActivityClassifier();
+        foreach (var s in Repeat(20, i => S(75 + i % 9, 0.62 + (i % 4) * 0.06, fs: true, app: "game"))) cls.Update(s);
+        foreach (var s in Repeat(10, _ => S(8, 0.1, fs: true, app: "game"))) cls.Update(s);
+        var afterLoading = cls.Current;
+        foreach (var s in Repeat(25, _ => S(6, 0.08, app: "explorer"))) cls.Update(s);
+        Check("Activity: a 10 s loading screen keeps Gaming; leaving the game drops it after a while",
+              afterLoading == ActivityKind.Gaming && cls.Current is ActivityKind.Desktop or ActivityKind.Idle,
+              $"after loading screen: {afterLoading}; after 25 s on the desktop: {cls.Current}");
+
+        // ---- strategy per activity ----
+        var auto = new FanOptions { Mode = FanMode.Smart };
+        double gTarget = FanOptions.DefaultActivities[ActivityKind.Gaming].TargetHotspotC;
+        double cTarget = FanOptions.DefaultActivities[ActivityKind.Compute].TargetHotspotC;
+        ActivitySample Game(int t) => S(80 + t % 7, 0.85 + (t % 3) * 0.04, fs: true, app: "game");
+        var gaming = RunPlant(auto, _ => 300, 500, activity: Game);
+        double gamingErr = gaming.HotspotC.Skip(350).Max(h => Math.Abs(h - gTarget));
+        Check($"Auto while gaming holds the Gaming target ({gTarget:F0} °C)", gamingErr <= 2.5 && gaming.Statuses[^1].Activity == ActivityKind.Gaming,
+              $"within {gamingErr:F1} °C of {gTarget:F0}; {gaming.Statuses[^1].Text}");
+
+        var render = RunPlant(auto, _ => 320, 500, activity: _ => S(97, 0.95, app: "blender"));
+        double renderErr = render.HotspotC.Skip(350).Max(h => Math.Abs(h - cTarget));
+        Check($"Auto during a render holds the Compute target ({cTarget:F0} °C)", renderErr <= 2.5 && render.Statuses[^1].Activity == ActivityKind.Compute,
+              $"within {renderErr:F1} °C of {cTarget:F0}; {render.Statuses[^1].Text}");
+
+        // The ceiling: a heavy load with peaks that would otherwise cross 75 °C.
+        var heavy = RunPlant(auto, t => 360 + 50 * Math.Sin(t / 9.0), 600, startC: 60, activity: Game);
+        double heavyPeak = heavy.HotspotC.Skip(150).Max();
+        Check("Auto keeps the hotspot under the 75 °C ceiling through load spikes", heavyPeak < 75,
+              $"peak {heavyPeak:F1} °C, fans up to {heavy.FanPercent.Skip(150).Max()}%");
+        var tooMuch = RunPlant(auto, _ => 560, 400, startC: 70, activity: Game);
+        Check("Auto says so when even full fans can't hold the ceiling", tooMuch.Statuses[^1].Text.Contains("ceiling") && tooMuch.Statuses[^1].Severity == AlertSeverity.Warning,
+              $"{tooMuch.HotspotC[^1]:F1} °C at {tooMuch.FanPercent[^1]}%: {tooMuch.Statuses[^1].Text}");
+
+        // ---- every sensor votes: hot memory chips take over while the hotspot looks fine ----
+        double? HotChips(int t, double hotC, int fan) => 70 + t * 0.12 - (fan - 30) * 0.25; // VRAM heating faster than the airflow keeps up
+        var withChips = RunPlant(auto, _ => 160, 240, startC: 55, activity: Game, memoryChips: HotChips);
+        var withoutChips = RunPlant(auto, _ => 160, 240, startC: 55, activity: Game);
+        bool chipsSteer = withChips.Statuses.Skip(120).Any(s => s.Steering == "memory chips");
+        Check("Auto: memory chips near their limit speed the fans up even with a cool hotspot",
+              chipsSteer && withChips.FanPercent[^1] > withoutChips.FanPercent[^1] + 5,
+              $"fans {withChips.FanPercent[^1]}% with the chip reading vs {withoutChips.FanPercent[^1]}% without; " +
+              $"steering: {withChips.Statuses[^1].Steering}; {withChips.Statuses[^1].Text}");
+
+        // ---- look-ahead: a power ramp starts the fans before the heat arrives ----
+        // Holding the Gaming target at 220 W, then a heavy scene arriving within 4 s (to 340 W).
+        Func<int, double> ramp = t => t < 300 ? 220 : Math.Min(340, 220 + (t - 300) * 30);
+        var lead = RunPlant(auto, ramp, 420, startC: gTarget, activity: Game);
+        var noLead = RunPlant(auto with { Activities = new Dictionary<ActivityKind, ActivityProfile>(FanOptions.DefaultActivities)
+                               { [ActivityKind.Gaming] = new(gTarget, SmartPriority.Tight, 0) } }, ramp, 420, startC: gTarget, activity: Game);
+        Check("Auto: 5 s look-ahead on a rising load moves the fans earlier (peak no worse)",
+              lead.FanPercent[305] > noLead.FanPercent[305] && lead.HotspotC.Skip(300).Max() <= noLead.HotspotC.Skip(300).Max() + 0.1,
+              $"fans 5 s into the ramp: {lead.FanPercent[305]}% vs {noLead.FanPercent[305]}% without look-ahead; " +
+              $"peak {lead.HotspotC.Skip(300).Max():F1} vs {noLead.HotspotC.Skip(300).Max():F1} °C");
+
+        // ---- learning: a second session at the same load settles faster ----
+        // A card whose airflow differs from the built-in estimate. Learn at 250 W, then compare a fresh
+        // controller and a learned one when the load jumps from 120 W to 250 W.
+        var first = RunPlant(auto, _ => 250, 900, startC: 55, activity: Game, cooling: 0.8);
+        Func<int, double> jump = t => t < 200 ? 120 : 250;
+        var fresh = RunPlant(auto, jump, 400, startC: 50, activity: Game, cooling: 0.8);
+        var learned = RunPlant(auto, jump, 400, startC: 50, activity: Game, cooling: 0.8, airflow: first.Airflow);
+        double Worst(PlantRun r) => r.HotspotC.Skip(200).Max(h => Math.Abs(h - gTarget));
+        Check("Auto learns this card's airflow: a load jump at a learned power level is handled better",
+              first.Airflow.Any(c => Math.Abs(c) >= 1) && Worst(learned) <= Worst(fresh) + 0.05,
+              $"learned corrections {string.Join(" ", first.Airflow.Select(c => c.ToString("+0;-0;0")))}; " +
+              $"worst miss after the jump: {Worst(fresh):F1} °C fresh, {Worst(learned):F1} °C with what it learned");
+
+        // ---- without load readings Auto behaves exactly as before ----
+        var plain = RunPlant(auto, _ => 300, 400);
+        Check($"Auto without activity readings keeps the general {auto.SmartTargetHotspotC:F0} °C target",
+              plain.HotspotC.Skip(240).Max(h => Math.Abs(h - auto.SmartTargetHotspotC)) <= 3 &&
+              plain.Statuses[^1].Activity == ActivityKind.Unknown, plain.Statuses[^1].Text);
+    }
+
+    /// <summary>The hardening helpers against a real junction (mklink /J works without administrator rights).</summary>
+    private static void TrustedPathsCheck()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"retweak-paths-{Guid.NewGuid():N}");
+        string real = Path.Combine(root, "real"), target = Path.Combine(root, "elsewhere"), link = Path.Combine(root, "link");
+        Directory.CreateDirectory(real);
+        Directory.CreateDirectory(target);
+        try
+        {
+            using (var mk = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(TrustedPaths.SystemExe("cmd.exe"), $"/c mklink /J \"{link}\" \"{target}\"")
+                   { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true })!) mk.WaitForExit();
+            bool haveLink = Directory.Exists(link);
+
+            bool plainOk = TrustedPaths.IsPlainPath(Path.Combine(real, "not-yet", "file.json"));
+            bool linkCaught = haveLink && !TrustedPaths.IsPlainPath(Path.Combine(link, "file.json"));
+            Check("Trusted paths: plain folders pass, a junction anywhere in the path is caught", plainOk && linkCaught,
+                  haveLink ? $"plain: {plainOk}, through junction: {(linkCaught ? "refused" : "allowed")}" : "couldn't create a junction to test with");
+
+            TrustedPaths.WriteFileSafely(Path.Combine(real, "settings.json"), "{}");
+            bool wrote = File.ReadAllText(Path.Combine(real, "settings.json")) == "{}" && Directory.GetFiles(real, "*.tmp").Length == 0;
+            bool refused;
+            try { TrustedPaths.WriteFileSafely(Path.Combine(link, "settings.json"), "{}"); refused = false; }
+            catch (IOException) { refused = true; }
+            Check("Trusted paths: safe write replaces atomically and won't write through a junction",
+                  wrote && refused && !File.Exists(Path.Combine(target, "settings.json")),
+                  $"plain write ok: {wrote}; through junction: {(refused ? "refused" : "WRITTEN")}");
+
+            bool under = TrustedPaths.IsUnder(Path.Combine(root, "real", "x"), root) && !TrustedPaths.IsUnder(root + "-other", root);
+            Check("Trusted paths: 'inside folder' check isn't fooled by a shared prefix", under, $"{under}");
+
+            string sysExe = TrustedPaths.SystemExe("schtasks.exe"), explorer = TrustedPaths.SystemExe("explorer.exe");
+            Check("Trusted paths: system programs by full path", Path.IsPathRooted(sysExe) && File.Exists(sysExe) && File.Exists(explorer),
+                  $"{sysExe}, {explorer}");
+        }
+        finally
+        {
+            try { if (Directory.Exists(link)) Directory.Delete(link); } catch (IOException) { } // removes the junction, not its target
+            try { Directory.Delete(root, recursive: true); } catch (IOException) { }
+        }
     }
 
     private static ConnectorReading Pins(Func<int, double> v, Func<int, double> a) =>

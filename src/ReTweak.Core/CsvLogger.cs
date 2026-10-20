@@ -13,7 +13,16 @@ public sealed class CsvLogger : IDisposable
     public CsvLogger(string path)
     {
         Path = path;
-        if (System.IO.Path.GetDirectoryName(path) is { Length: > 0 } dir) Directory.CreateDirectory(dir);
+        if (System.IO.Path.GetDirectoryName(System.IO.Path.GetFullPath(path)) is { Length: > 0 } dir)
+        {
+            // The folder comes from user-editable settings: an elevated ReTweak only writes inside the user's
+            // profile, never through a junction, and never appends through a planted link.
+            if (!TrustedPaths.IsAllowedUserFolder(dir))
+                throw new UnauthorizedAccessException($"Not logging to {dir}: running as administrator, logs must go to a plain folder in your profile.");
+            Directory.CreateDirectory(dir);
+        }
+        if (File.Exists(path) && (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
+            throw new IOException($"{path} is a link; not appending to it.");
         bool fresh = !File.Exists(path);
         _w = new StreamWriter(path, append: true) { AutoFlush = true };
         if (fresh)

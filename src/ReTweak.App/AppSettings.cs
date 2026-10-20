@@ -35,10 +35,8 @@ public sealed record AppSettings
 
     public void Save()
     {
-        Directory.CreateDirectory(Folder);
-        string tmp = FilePath + ".tmp";
-        File.WriteAllText(tmp, JsonSerializer.Serialize(this, Json));
-        File.Move(tmp, FilePath, overwrite: true); // atomic replace: a crash mid-save can't corrupt settings
+        // Atomic replace (a crash mid-save can't corrupt settings), and safe when elevated: no following links.
+        TrustedPaths.WriteFileSafely(FilePath, JsonSerializer.Serialize(this, Json));
     }
 
     /// <summary>Validation for user-entered thresholds; null when valid.</summary>

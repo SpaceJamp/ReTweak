@@ -120,7 +120,7 @@
                             <TextBlock Text="{x:Bind ViewModel.HotspotChannels, Mode=OneWay}" TextWrapping="Wrap"
                                        ToolTipService.ToolTip="The GPU's four thermal sensors; the hotspot is the hottest of them (register #5). HWMonitor's Hot Spot is sensor #1 only."
                                        Style="{StaticResource CaptionTextBlockStyle}" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
-                            <HyperlinkButton Content="Get PawnIO" Padding="0" Margin="0,2,0,0" NavigateUri="https://pawnio.eu/"
+                            <HyperlinkButton Content="Get PawnIO" Padding="0" Margin="0,2,0,0" Click="GetPawnIo_Click"
                                              Visibility="{x:Bind ViewModel.OfferPawnIo}" />
                         </StackPanel>
                     </Border>
@@ -188,6 +188,8 @@
                                 <Button Content="Balanced" Tag="Balanced" Click="FanPreset_Click" Padding="10,3" />
                                 <Button Content="Performance" Tag="Performance" Click="FanPreset_Click" Padding="10,3" />
                             </StackPanel>
+                            <TextBlock Text="{x:Bind ViewModel.FanInputs, Mode=OneWay}" TextWrapping="Wrap" MaxWidth="320"
+                                       Style="{StaticResource CaptionTextBlockStyle}" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
                             <TextBlock Style="{StaticResource CaptionTextBlockStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                        TextWrapping="Wrap" MaxWidth="320"
                                        Text="In Curve mode, drag the points on the chart. More options (input, ramping, 0 RPM, failsafes, the Auto safety net) are in Settings." />

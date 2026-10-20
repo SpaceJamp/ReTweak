@@ -12,9 +12,13 @@ going wrong.
 - **Temperatures**: precise core (0.01 °C) and memory on RTX 50; on ASUS cards, memory comes from the
   board sensors GPU Tweak III uses, plus 8 board sensors (VRM, core, memory and more)
 - **Early-warning alerts**: pin over-current, low/high voltage, pin-to-pin voltage spread, current imbalance, fast voltage drops or current ramps, frozen sensor, high core, memory or hotspot temperature
-- **Fan control**: **Auto** is ReTweak's own controller: it holds the hotspot at a target (80 °C by
-  default; the core at 72 °C without PawnIO), speeding the fans up as soon as board power rises and
-  trimming the remaining error, with Quiet / Balanced / Tight tuning. Also: Driver (the card's own curve) with a safety net, a fixed speed, or a 5-point curve (drag the points
+- **Fan control**: **Auto** is ReTweak's own controller. It works out what you're doing (idle, desktop,
+  video, gaming, rendering/AI/encoding) from GPU, video-engine and memory load, how power swings and the
+  foreground app, and holds a target per activity (60-70 °C hotspot by default) under a **75 °C ceiling**.
+  Every sensor votes against its own limit (hotspot and its 4 sensors, core, memory or each memory chip,
+  ASUS VRMs) and the one closest to its limit sets the speed; a rising load is projected a few seconds
+  ahead, and it learns how much airflow your card needs at each power level. With PawnIO it sees the
+  hotspot and per-chip memory temperatures too. Also: Driver (the card's own curve) with a safety net, a fixed speed, or a 5-point curve (drag the points
   on the dashboard, or pick Quiet / Balanced / Performance). The curve can follow the core, hotspot,
   memory or the hottest of them; speed changes are ramped and the temperature averaged so the fans don't
   step on short spikes; optional 0 RPM below a temperature you choose. Full speed at a core, hotspot or
@@ -59,8 +63,9 @@ How the register was found: [docs/power-detector.md](docs/power-detector.md#hots
 ## Diagnostic log
 
 For tracking down problems, Settings → Diagnostics turns on a detailed log (or start the app or
-CLI with `--debug` for one run at full detail). Files are JSON lines in
-`%LocalAppData%\ReTweak\diagnostics` (10 MB each, last 10 kept), written from a background thread:
+CLI with `--debug` for one run at full detail). Files are JSON lines (10 MB each, last 10 kept), written
+from a background thread, in `%ProgramData%\ReTweak\diagnostics` when running as administrator (only
+administrators can change that folder; everyone can read it) or `%LocalAppData%\ReTweak\diagnostics` otherwise:
 
 | Level | Adds |
 |---|---|
@@ -70,6 +75,22 @@ CLI with `--debug` for one run at full detail). Files are JSON lines in
 
 **Save diagnostics to Desktop** zips the logs, settings, the latest connector CSVs and an
 environment summary, ready to attach to an issue.
+
+## Running as administrator safely
+
+The elevated ReTweak never lets files or registry keys your normal account controls redirect it:
+it doesn't follow junctions or symlinks in folders it writes to (settings, learned airflow, logs),
+only writes CSV logs and the diagnostics zip inside your profile, keeps its diagnostic log in an
+admin-only folder, starts `explorer.exe` and `schtasks.exe` by full path without ShellExecute, and
+checks that a newly registered logon task really runs ReTweak.
+
+**Security check** (Settings → Security, or `ReTweak.Cli --security-check`, also in the diagnostics
+zip): a read-only audit of ReTweak's program folder (can your normal account change what the
+elevated logon task runs?), the bundled PawnIO module's hash, the logon task, the PawnIO driver's
+signature, ReTweak's data folders, per-user registry entries used by UAC-bypass malware, other
+risky hardware drivers (WinRing0, RTCore64, older ASUS AsIO/IOMap) and fan tools, and Windows
+protections (UAC, Memory Integrity, the vulnerable driver blocklist, Secure Boot). Each item says
+what it found and what to do about it.
 
 ## Layout
 

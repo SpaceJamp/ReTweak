@@ -214,11 +214,20 @@ public static class Diag
 
     private static (StreamWriter, long) OpenNext(string folder)
     {
-        string path = Path.Combine(folder, $"diag-{DateTime.Now:yyyyMMdd-HHmmss-fff}.jsonl");
-        var writer = new StreamWriter(new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite)) { AutoFlush = false };
+        // Never follow a junction or symlink here: an elevated ReTweak must not be steered into creating or
+        // deleting files elsewhere. CreateNew refuses an existing file (or a planted link) instead of appending.
+        if (!TrustedPaths.IsPlainPath(folder)) throw new IOException($"{folder} is (or is inside) a junction or symlink");
+        string path = Path.Combine(folder, $"diag-{DateTime.Now:yyyyMMdd-HHmmss-fff}-{Environment.ProcessId}.jsonl");
+        var writer = new StreamWriter(new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.Read)) { AutoFlush = false };
         _currentFile = path;
         foreach (var old in Directory.GetFiles(folder, "diag-*.jsonl").OrderByDescending(f => f).Skip(MaxFiles))
-            try { File.Delete(old); } catch (IOException) { }
+        {
+            try
+            {
+                if ((File.GetAttributes(old) & FileAttributes.ReparsePoint) == 0 && TrustedPaths.IsPlainPath(folder)) File.Delete(old);
+            }
+            catch (Exception) { /* in use or gone */ }
+        }
         return (writer, 0);
     }
 

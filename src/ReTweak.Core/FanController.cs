@@ -21,8 +21,12 @@ public sealed record FanPoint(double TempC, int Percent);
 /// <param name="HotspotC">Hotspot averaged over the last second: what the curve follows.</param>
 /// <param name="HotspotMaxC">Highest hotspot reading in the last second: what failsafes and the safety net use.</param>
 /// <param name="PowerFraction">Board power / power limit (0-1): lets Smart mode react to load before temperature does.</param>
+/// <param name="MemoryChipMaxC">Hottest memory chip, read through PawnIO (null without it).</param>
+/// <param name="VrmMaxC">Hottest VRM board sensor (ASUS cards).</param>
+/// <param name="Activity">Load and foreground-app readings for activity detection (null: don't adapt).</param>
 public readonly record struct FanTemps(double? CoreC, double? HotspotC = null, double? MemoryC = null, double? HotspotMaxC = null,
-                                       double? PowerFraction = null)
+                                       double? PowerFraction = null, double? MemoryChipMaxC = null, double? VrmMaxC = null,
+                                       ActivitySample? Activity = null)
 {
     /// <summary>The hotspot to make safety decisions on: the peak when known, else the average.</summary>
     public double? HotspotPeakC => HotspotMaxC ?? HotspotC;
@@ -74,12 +78,43 @@ public sealed record FanOptions
     /// load estimate from board power plus a proportional-integral correction on the temperature
     /// error; see <see cref="SmartTuning"/>. Failsafes, ramping and the driver's minimum still apply.
     /// </summary>
-    public double SmartTargetHotspotC { get; init; } = 80;
+    public double SmartTargetHotspotC { get; init; } = 70;
     /// <summary>Used when there's no hotspot (no PawnIO): the core runs a few degrees below the hotspot.</summary>
-    public double SmartTargetCoreC { get; init; } = 72;
+    public double SmartTargetCoreC { get; init; } = 62;
+    /// <summary>
+    /// Auto pushes hard to keep the hotspot's 1 s peak under this (core: 8 °C lower without a hotspot),
+    /// whatever the activity. 0 turns it off. At full load this can need fans near 100%.
+    /// </summary>
+    public double CeilingC { get; init; } = 75;
     public SmartPriority SmartPriority { get; init; } = SmartPriority.Balanced;
     /// <summary>Hand the fans to the driver well below the target at low load, so they can stop (0 RPM).</summary>
     public bool SmartIdleStop { get; init; }
+
+    /// <summary>Auto picks a target and style for what you're doing (<see cref="Activities"/>).</summary>
+    public bool AdaptToActivity { get; init; } = true;
+    /// <summary>Let activity detection look at the foreground window (fullscreen, process name). Stays on this PC.</summary>
+    public bool UseForegroundApp { get; init; } = true;
+    public IReadOnlyDictionary<ActivityKind, ActivityProfile> Activities { get; init; } = DefaultActivities;
+
+    public static IReadOnlyDictionary<ActivityKind, ActivityProfile> DefaultActivities { get; } = new Dictionary<ActivityKind, ActivityProfile>
+    {
+        // All under the default 75 °C ceiling, with room for load spikes.
+        [ActivityKind.Idle] = new(60, SmartPriority.Quiet, 0),
+        [ActivityKind.Desktop] = new(62, SmartPriority.Quiet, 0),
+        [ActivityKind.Video] = new(62, SmartPriority.Quiet, 0),
+        [ActivityKind.Gaming] = new(70, SmartPriority.Tight, 5),
+        [ActivityKind.Compute] = new(69, SmartPriority.Balanced, 3),
+    };
+
+    /// <summary>
+    /// Auto also listens to these sensors, each against its own target and limit: whichever is closest to
+    /// its limit steers the fans. Placeholders until load-tested.
+    /// </summary>
+    public double MemoryTargetC { get; init; } = 84;
+    public double MemoryChipTargetC { get; init; } = 90;
+    public double MemoryChipLimitC { get; init; } = 105;
+    public double VrmTargetC { get; init; } = 90;
+    public double VrmLimitC { get; init; } = 105;
 
     /// <summary>Ready-made curves, written for the core temperature.</summary>
     public static IReadOnlyDictionary<string, IReadOnlyList<FanPoint>> Presets { get; } = new Dictionary<string, IReadOnlyList<FanPoint>>
@@ -124,10 +159,19 @@ public sealed record FanOptions
         if (AssistReleaseMarginC is < 1 or > 20) return "Safety-net release margin must be 1-20 °C.";
         if (AssistHoldSeconds is < 0 or > 600) return "Safety-net hold time must be 0-600 s.";
         if (AssistBoostPercent is < 0 or > 100) return "Safety-net boost must be 0-100 %.";
-        if (SmartTargetHotspotC is < 50 or > 105) return "Auto hotspot target must be 50-105 °C.";
-        if (SmartTargetCoreC is < 40 or > 95) return "Auto core target must be 40-95 °C.";
+        if (SmartTargetHotspotC is < 40 or > 105) return "Auto hotspot target must be 40-105 °C.";
+        if (CeilingC != 0 && CeilingC is < 45 or > 110) return "Auto ceiling must be 45-110 °C (0 = off).";
+        if (SmartTargetCoreC is < 35 or > 95) return "Auto core target must be 35-95 °C.";
         if (SmartTargetHotspotC >= FailsafeHotspotC) return "Auto hotspot target must be below the hotspot failsafe.";
         if (SmartTargetCoreC >= FailsafeTempC) return "Auto core target must be below the core failsafe.";
+        foreach (var (kind, prof) in Activities)
+        {
+            if (prof.TargetHotspotC is < 40 or > 105) return $"Auto {kind} target must be 40-105 °C.";
+            if (prof.TargetHotspotC >= FailsafeHotspotC) return $"Auto {kind} target must be below the hotspot failsafe.";
+            if (prof.LeadSeconds is < 0 or > 15) return $"Auto {kind} look-ahead must be 0-15 s.";
+        }
+        // A memory target at or above a lowered memory failsafe just drops that vote (see SmartTick): not an error.
+        if (MemoryChipTargetC >= MemoryChipLimitC || VrmTargetC >= VrmLimitC) return "Memory-chip and VRM targets must be below their limits.";
         return null;
     }
 
@@ -170,8 +214,11 @@ public sealed record FanOptions
 /// <param name="Percent">Speed ReTweak is holding, or null while the driver has the fans.</param>
 /// <param name="SourceTempC">Smoothed temperature the curve used (for the chart).</param>
 /// <param name="Assisting">Auto mode's safety net has taken over.</param>
+/// <param name="Activity">What Auto thinks you're doing (Smart mode).</param>
+/// <param name="Steering">The sensor closest to its limit, which is setting the fan speed (Smart mode).</param>
 public sealed record FanStatus(FanMode Mode, int? Percent, string Text, AlertSeverity Severity = AlertSeverity.None,
-                               bool NeedsAdmin = false, double? SourceTempC = null, bool Assisting = false);
+                               bool NeedsAdmin = false, double? SourceTempC = null, bool Assisting = false,
+                               ActivityKind Activity = ActivityKind.Unknown, string? Steering = null);
 
 /// <summary>
 /// Drives the fans from <see cref="FanOptions"/>. Call <see cref="Tick"/> about once a second,
@@ -212,6 +259,14 @@ public sealed class FanController : IDisposable
     private bool _smartRunning, _smartIdle;
     private string? _smartInput;     // "hotspot" or "core": switching resets the controller
     private object? _lastSmart;      // this tick's controller terms, for the diagnostic log
+    private readonly ActivityClassifier _activity = new();
+    private readonly Queue<double> _powerTrend = new(); // last few power readings, for look-ahead
+    private int _stableTicks;        // consecutive ticks on target, for learning
+    private double _leadHold;        // projected power, fading out after a ramp
+
+    /// <summary>Airflow the card needs per power level, learned in Auto; persist it with <see cref="AirflowModel.Corrections"/>.</summary>
+    public AirflowModel Airflow { get; } = new();
+    public string ActivityReason => _activity.Reason;
     private string? _blocked;        // write failed; don't retry until the options change
     private bool _blockedByPermission;
     private bool _disposed;
@@ -277,6 +332,8 @@ public sealed class FanController : IDisposable
         if (st.Mode != before.Mode || st.Assisting != before.Assisting || st.NeedsAdmin != before.NeedsAdmin
             || st.Severity != before.Severity || (st.Percent is null) != (before.Percent is null))
             Diag.Info(DiagCategory.Fan, "fan state changed", new { from = before.Text, to = st.Text, severity = st.Severity.ToString() });
+        if (st.Activity != before.Activity)
+            Diag.Info(DiagCategory.Fan, "activity changed", new { from = before.Activity.ToString(), to = st.Activity.ToString(), reason = _activity.Reason });
         return st;
     }
 
@@ -368,23 +425,62 @@ public sealed class FanController : IDisposable
     /// </summary>
     private FanStatus SmartTick(FanOptions o, FanTemps t, string? failsafe, double temp, string input, double dt)
     {
-        var tune = FanOptions.SmartTuning.For(o.SmartPriority);
-        double target = input == "hotspot" ? o.SmartTargetHotspotC : o.SmartTargetCoreC;
-        double error = temp - target;
-        double power = Math.Clamp(t.PowerFraction ?? 0.35, 0, 1.2);
+        // 1. What is the user doing, and how should Auto behave for it?
+        var activity = o.AdaptToActivity && t.Activity is { } sample ? _activity.Update(sample) : ActivityKind.Unknown;
+        var profile = activity != ActivityKind.Unknown && o.Activities.TryGetValue(activity, out var p)
+            ? p : new ActivityProfile(o.SmartTargetHotspotC, o.SmartPriority, 3);
+        var tune = FanOptions.SmartTuning.For(profile.Priority);
+        double primaryTarget = input == "hotspot" ? profile.TargetHotspotC
+                             : activity == ActivityKind.Unknown ? o.SmartTargetCoreC : profile.TargetHotspotC - 8;
+        double primaryLimit = input == "hotspot" ? o.FailsafeHotspotC : o.FailsafeTempC;
+        double span = primaryLimit - primaryTarget;
 
-        if (o.SmartIdleStop && failsafe is null)
+        // 2. Every sensor votes, scaled to its own headroom: 0 = at its target, span = at its limit.
+        //    The most urgent one steers. Secondary sensors' targets sit near their limits, so they only
+        //    take over when they're the real problem (hot VRAM or VRMs while the hotspot looks fine).
+        var votes = new List<(string Name, double Value, double Target, double Error)> { (input, temp, primaryTarget, temp - primaryTarget) };
+        void Vote(string name, double? value, double target, double limit)
+        {
+            if (value is double v && limit > target) votes.Add((name, v, target, (v - target) / (limit - target) * span));
+        }
+        if (input == "hotspot") Vote("core", t.CoreC, o.FailsafeTempC - 8, o.FailsafeTempC);
+        Vote("memory", t.MemoryC, o.MemoryTargetC, o.FailsafeMemoryC);
+        Vote("memory chips", t.MemoryChipMaxC, o.MemoryChipTargetC, o.MemoryChipLimitC);
+        Vote("VRM", t.VrmMaxC, o.VrmTargetC, o.VrmLimitC);
+        // The ceiling: starts pushing 3 °C below it and counts as being at a limit when the peak reaches it.
+        double? ceilingInput = input == "hotspot" ? t.HotspotPeakC : t.CoreC;
+        double ceiling = input == "hotspot" ? o.CeilingC : o.CeilingC - 8;
+        if (o.CeilingC > 0) Vote($"{input} ceiling", ceilingInput, ceiling - 3, ceiling);
+        var steer = votes.MaxBy(v => v.Error);
+        double error = steer.Error;
+
+        // 3. Load now, and where a rising trend will be in a few seconds.
+        double power = Math.Clamp(t.PowerFraction ?? 0.35, 0, 1.2);
+        _powerTrend.Enqueue(power);
+        while (_powerTrend.Count > 5) _powerTrend.Dequeue();
+        double slope = _powerTrend.Count >= 2 ? (_powerTrend.Last() - _powerTrend.First()) / (_powerTrend.Count - 1) : 0;
+        // The projection fades out (2% of the limit per second) instead of snapping back when the ramp ends:
+        // the heat from the ramp is still arriving then, and dropping the fans at that moment raised the peak.
+        double projected = Math.Min(1.2, power + Math.Max(0, slope) * profile.LeadSeconds);
+        _leadHold = Math.Max(projected, Math.Max(power, _leadHold - 0.02 * dt));
+        double predicted = _leadHold;
+
+        bool idleAllowed = activity is ActivityKind.Idle or ActivityKind.Unknown;
+        if (o.SmartIdleStop && failsafe is null && idleAllowed)
         {
             _smartIdle = _smartIdle ? !(error > -15 || power >= 0.25) : error < -20 && power < 0.15;
             if (_smartIdle)
             {
                 _smartRunning = false;
                 Release();
-                return Status = new(FanMode.Smart, null, $"Auto · idle, driver can stop the fans ({input} {temp:F0} °C)", SourceTempC: temp);
+                return Status = new(FanMode.Smart, null, $"Auto · idle, driver can stop the fans ({input} {temp:F0} °C)", SourceTempC: temp,
+                                    Activity: activity);
             }
         }
+        else _smartIdle = false;
 
-        double feedForward = 25 + 55 * Math.Min(power, 1);
+        // 4. Proportional-integral on the steering error, on top of the learned load estimate.
+        double feedForward = Airflow.Estimate(predicted);
         double effective = Math.Abs(error) <= tune.DeadbandC ? 0 : error - Math.Sign(error) * tune.DeadbandC;
         if (!_smartRunning)
         {
@@ -400,26 +496,49 @@ public sealed class FanController : IDisposable
 
         double unclamped = feedForward + tune.Kp * effective + _integral;
         bool pinnedHigh = unclamped >= _range.Max && effective > 0, pinnedLow = unclamped <= _range.Min && effective < 0;
-        if (!pinnedHigh && !pinnedLow) _integral = Math.Clamp(_integral + tune.Ki * effective * dt, -60, 60);
+        // While the look-ahead is adding fan, being briefly below target is its doing, not a lasting surplus:
+        // don't let the integral unwind, or it's missing when the projected heat actually arrives.
+        bool leading = predicted > power + 0.01;
+        if (!pinnedHigh && !pinnedLow && !(leading && effective < 0)) _integral = Math.Clamp(_integral + tune.Ki * effective * dt, -60, 60);
         else if (_integral * effective < 0) _integral *= Math.Exp(-dt / 10); // pinned, and the integral points the wrong way: drain it
+
+        // 5. Learning: holding the target with a steady integral means the load estimate is off for this
+        //    card at this power. After 20 s on target, move it into the airflow table a little at a time.
+        // "On target" allows for the hotspot's normal jitter: a tight dead band alone would never stay put for 20 s.
+        _stableTicks = Math.Abs(error) <= Math.Max(tune.DeadbandC, 1.5) && !pinnedHigh && !pinnedLow && failsafe is null
+                       && t.PowerFraction is not null && Math.Abs(slope) < 0.01 ? _stableTicks + 1 : 0;
+        double learned = 0;
+        if (_stableTicks >= 20 && Math.Abs(_integral) > 0.5)
+        {
+            learned = Airflow.Learn(power, _integral * 0.02 * dt);
+            _integral -= learned; // the estimate rose by exactly this, so the output doesn't move
+        }
+
         int target100 = failsafe is not null ? 100 : (int)Math.Round(Math.Clamp(feedForward + tune.Kp * effective + _integral, _range.Min, _range.Max));
         _lastSmart = new
         {
-            input, targetC = target, errorC = Math.Round(error, 2), effectiveC = Math.Round(effective, 2),
+            activity = activity.ToString(), activityReason = _activity.Reason, profile,
+            steering = steer.Name, votes = votes.Select(v => new { v.Name, v.Value, v.Target, error = Math.Round(v.Error, 2) }),
+            power = Math.Round(power, 3), slope = Math.Round(slope, 4), predicted = Math.Round(predicted, 3),
             feedForward = Math.Round(feedForward, 2), proportional = Math.Round(tune.Kp * effective, 2),
             integral = Math.Round(_integral, 2), unclamped = Math.Round(unclamped, 2), pinnedHigh, pinnedLow,
-            target = target100, priority = o.SmartPriority.ToString(),
+            learned = Math.Round(learned, 4), stableTicks = _stableTicks, target = target100,
         };
 
         var ramped = o with { RampUpPerSecond = tune.RampUp, RampDownPerSecond = tune.RampDown };
         if (Drive(target100, jump: failsafe is not null, ramped, dt) is { } blocked) return blocked;
 
+        string what = activity == ActivityKind.Unknown ? "" : $"{activity} · ";
         if (failsafe is not null)
-            return Status = new(FanMode.Smart, _applied, $"Full speed: {failsafe}", AlertSeverity.Warning, SourceTempC: temp);
+            return Status = new(FanMode.Smart, _applied, $"Full speed: {failsafe}", AlertSeverity.Warning, SourceTempC: temp, Activity: activity);
         if (_overrides >= OverridesBeforeWarning)
             return Status = new(FanMode.Smart, _applied, $"Auto {_applied}%, but another program keeps changing the fans. Close other fan tools.",
-                                AlertSeverity.Warning, SourceTempC: temp);
-        return Status = new(FanMode.Smart, _applied, $"Auto · {_applied}% · {input} {temp:F1} °C → {target:F0} °C", SourceTempC: temp);
+                                AlertSeverity.Warning, SourceTempC: temp, Activity: activity);
+        if (o.CeilingC > 0 && _applied >= _range.Max && ceilingInput > ceiling)
+            return Status = new(FanMode.Smart, _applied, $"Auto · {what}fans at maximum and {input} {ceilingInput:F0} °C is still over the {ceiling:F0} °C ceiling",
+                                AlertSeverity.Warning, SourceTempC: temp, Activity: activity, Steering: steer.Name);
+        return Status = new(FanMode.Smart, _applied, $"Auto · {what}{_applied}% · {steer.Name} {steer.Value:F1} °C → {steer.Target:F0} °C",
+                            SourceTempC: temp, Activity: activity, Steering: steer.Name);
     }
 
     /// <summary>Auto: the driver has the fans unless the safety net (or a failsafe) needs to step in.</summary>

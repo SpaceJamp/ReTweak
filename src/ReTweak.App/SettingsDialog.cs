@@ -52,7 +52,8 @@ internal static class SettingsDialog
         };
         var diagNote = new TextBlock
         {
-            Text = (Diagnostics.ForcedByArg ? "Started with --debug: logging everything for this run. " : "") +
+            Text = (Diagnostics.Problem is { } problem ? problem + " " : "") +
+                   (Diagnostics.ForcedByArg ? "Started with --debug: logging everything for this run. " : "") +
                    (Diag.CurrentFile is { } f0 ? $"Writing {f0}" : $"Files go to {Diagnostics.Folder} (10 MB each, last 10 kept)."),
             Style = (Style)Application.Current.Resources["CaptionTextBlockStyle"],
             TextWrapping = TextWrapping.Wrap,
@@ -66,12 +67,50 @@ internal static class SettingsDialog
         };
         openDiag.Click += (_, _) =>
         {
-            Directory.CreateDirectory(Diagnostics.Folder);
-            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(Diagnostics.Folder) { UseShellExecute = true });
+            try
+            {
+                Directory.CreateDirectory(Diagnostics.Folder);
+                TrustedPaths.OpenInExplorer(Diagnostics.Folder); // full path to explorer.exe, no ShellExecute
+            }
+            catch (Exception ex) { diagNote.Text = $"Couldn't open the folder: {ex.Message}"; }
         };
         var diagButtons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 12 };
         diagButtons.Children.Add(saveDiag);
         diagButtons.Children.Add(openDiag);
+
+        // Security check: runs off the UI thread (signature checks, registry, ACLs), results shown inline.
+        var securityResults = new StackPanel { Spacing = 6 };
+        var runSecurity = new Button { Content = "Run security check" };
+        runSecurity.Click += async (_, _) =>
+        {
+            runSecurity.IsEnabled = false;
+            securityResults.Children.Clear();
+            securityResults.Children.Add(new ProgressRing { IsActive = true, Width = 20, Height = 20, HorizontalAlignment = HorizontalAlignment.Left });
+            var findings = await Task.Run(() => Diagnostics.RunSecurityCheck(current));
+            securityResults.Children.Clear();
+            int warn = findings.Count(x => x.Status == CheckStatus.Warn), fail = findings.Count(x => x.Status == CheckStatus.Fail);
+            securityResults.Children.Add(new InfoBar
+            {
+                IsOpen = true, IsClosable = false,
+                Severity = fail > 0 ? InfoBarSeverity.Error : warn > 0 ? InfoBarSeverity.Warning : InfoBarSeverity.Success,
+                Title = fail > 0 ? $"{fail} problem(s) found" : warn > 0 ? $"{warn} thing(s) to look at" : "All clear",
+                Message = $"{findings.Count(x => x.Status == CheckStatus.Pass)} passed, {findings.Count(x => x.Status == CheckStatus.Info)} for information.",
+            });
+            foreach (var x in findings.OrderByDescending(x => x.Status))
+            {
+                var item = new StackPanel { Spacing = 2 };
+                item.Children.Add(new TextBlock
+                {
+                    Text = $"{(x.Status switch { CheckStatus.Fail => "✖", CheckStatus.Warn => "⚠", CheckStatus.Info => "ℹ", _ => "✔" })}  {x.Area} · {x.Title}",
+                    Style = (Style)Application.Current.Resources["BodyStrongTextBlockStyle"], TextWrapping = TextWrapping.Wrap,
+                    Foreground = x.Status switch { CheckStatus.Fail => Theme.Critical, CheckStatus.Warn => Theme.Warn, CheckStatus.Pass => Theme.Ok, _ => Theme.Muted },
+                });
+                if (x.Detail.Length > 0) item.Children.Add(Caption(x.Detail));
+                if (x.Advice.Length > 0) item.Children.Add(Caption("→ " + x.Advice));
+                securityResults.Children.Add(item);
+            }
+            runSecurity.IsEnabled = true;
+        };
 
         var logNote = new TextBlock
         {
@@ -152,6 +191,34 @@ internal static class SettingsDialog
             ItemsSource = new[] { "Quiet (slow, rare changes)", "Balanced", "Tight (holds within ~1 °C)" },
         };
         var smartIdle = new ToggleSwitch { Header = "Auto: let the driver stop the fans at idle (0 RPM)", IsOn = f.SmartIdleStop };
+        var ceiling = Num("Auto: keep the hotspot under (°C, 0 = no ceiling)", f.CeilingC);
+        ceiling.SmallChange = 1;
+        var adapt = new ToggleSwitch { Header = "Auto: adapt to what you're doing (idle, video, gaming, rendering)", IsOn = f.AdaptToActivity };
+        var foreground = new ToggleSwitch
+        {
+            Header = "Auto: look at the foreground app (fullscreen, program name; stays on this PC)", IsOn = f.UseForegroundApp,
+        };
+        var kinds = new[] { ActivityKind.Idle, ActivityKind.Desktop, ActivityKind.Video, ActivityKind.Gaming, ActivityKind.Compute };
+        var styles = new[] { "Quiet", "Balanced", "Tight" };
+        var actTargets = new Dictionary<ActivityKind, NumberBox>();
+        var actStyles = new Dictionary<ActivityKind, ComboBox>();
+        void FillActivities(IReadOnlyDictionary<ActivityKind, ActivityProfile> profiles)
+        {
+            foreach (var k in kinds)
+            {
+                var prof = profiles.TryGetValue(k, out var v) ? v : FanOptions.DefaultActivities[k];
+                actTargets[k].Value = prof.TargetHotspotC;
+                actStyles[k].SelectedIndex = (int)prof.Priority;
+            }
+        }
+        foreach (var k in kinds)
+        {
+            actTargets[k] = Num($"{k}: hotspot target (°C)", 0);
+            actTargets[k].SmallChange = 1;
+            actStyles[k] = new ComboBox { Header = $"{k}: style", ItemsSource = styles, MinWidth = 150 };
+        }
+        FillActivities(f.Activities);
+        var activityGrid = Pairs(kinds.Select(k => ((FrameworkElement)actTargets[k], (FrameworkElement?)actStyles[k])).ToArray());
         var fanSource = new ComboBox
         {
             Header = "Curve follows", MinWidth = 220, SelectedIndex = (int)f.Source,
@@ -241,6 +308,8 @@ internal static class SettingsDialog
             fanSource.SelectedIndex = (int)d.Source;
             smartHot.Value = d.SmartTargetHotspotC; smartCore.Value = d.SmartTargetCoreC;
             smartPriority.SelectedIndex = (int)d.SmartPriority; smartIdle.IsOn = d.SmartIdleStop;
+            ceiling.Value = d.CeilingC; adapt.IsOn = d.AdaptToActivity; foreground.IsOn = d.UseForegroundApp;
+            FillActivities(d.Activities);
             fanFixed.Value = d.FixedPercent; fanHyst.Value = d.HysteresisC;
             rampUp.Value = d.RampUpPerSecond; rampDown.Value = d.RampDownPerSecond; smoothing.Value = d.SmoothingSeconds;
             zeroRpm.IsOn = d.ZeroRpm; zeroBelow.Value = d.ZeroRpmBelowC;
@@ -264,9 +333,13 @@ internal static class SettingsDialog
             error, Section("General"), autostart, autostartNote, tray, toasts,
             Section("Logging"), log, logFolder, logNote,
             Section("Diagnostics"), diagLevel, diagNote, diagButtons,
+            Section("Security"), Caption("Checks ReTweak's files, autostart, the PawnIO driver, data folders, known UAC-bypass entries, " +
+                                         "risky drivers and Windows protections. Read-only."), runSecurity, securityResults,
             Section("Alert thresholds"), grid, reset,
             Section("Fan control"), fanNote, Pairs((fanMode, fanSource)), fanFixed,
-            Section("Auto"), Pairs((smartHot, smartCore), (smartPriority, null)), smartIdle,
+            Section("Auto"), ceiling, adapt, foreground, activityGrid,
+            Caption("When Auto can't tell what you're doing (no load readings), it uses these:"),
+            Pairs((smartHot, smartCore), (smartPriority, null)), smartIdle,
             Section("Curve"), presetRow, curveGrid, Pairs((fanHyst, smoothing), (rampUp, rampDown)), zeroRpm, zeroBelow,
             Section("Failsafes (all modes that write)"), Pairs((failCore, failHot), (failMem, null)),
             Section("Auto safety net"), assistNote, assist, Pairs((assistHot, assistMem), (assistGap, assistBoost), (assistHold, assistMargin)),
@@ -312,7 +385,7 @@ internal static class SettingsDialog
 
             var fanBoxes = curveTemps.Concat(curvePcts).Concat(new[]
             {
-                fanFixed, fanHyst, rampUp, rampDown, smoothing, zeroBelow, failCore, failHot, failMem, smartHot, smartCore,
+                fanFixed, fanHyst, rampUp, rampDown, smoothing, zeroBelow, failCore, failHot, failMem, smartHot, smartCore, ceiling,
                 assistHot, assistMem, assistGap, assistBoost, assistHold, assistMargin,
             });
             if (problem is null && fanBoxes.Any(b => double.IsNaN(b.Value))) problem = "Every fan setting needs a number.";
@@ -323,6 +396,14 @@ internal static class SettingsDialog
                 SmartTargetCoreC = smartCore.Value,
                 SmartPriority = (SmartPriority)Math.Max(0, smartPriority.SelectedIndex),
                 SmartIdleStop = smartIdle.IsOn,
+                CeilingC = ceiling.Value,
+                AdaptToActivity = adapt.IsOn,
+                UseForegroundApp = foreground.IsOn,
+                Activities = kinds.ToDictionary(k => k, k =>
+                {
+                    var old = current.Fans.Activities.TryGetValue(k, out var v) ? v : FanOptions.DefaultActivities[k];
+                    return old with { TargetHotspotC = actTargets[k].Value, Priority = (SmartPriority)Math.Max(0, actStyles[k].SelectedIndex) };
+                }),
                 Source = (FanSource)Math.Max(0, fanSource.SelectedIndex),
                 FixedPercent = (int)Math.Round(fanFixed.Value),
                 Curve = Enumerable.Range(0, CurvePoints).Select(i => new FanPoint(curveTemps[i].Value, (int)Math.Round(curvePcts[i].Value))).ToList(),
