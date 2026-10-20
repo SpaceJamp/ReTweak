@@ -74,6 +74,13 @@ public sealed record AlertOptions
     /// </summary>
     public double WarnHotspotTempC { get; init; } = 95;
     public double CriticalHotspotTempC { get; init; } = 105;
+    /// <summary>
+    /// Die spread (<see cref="GpuSnapshot.HotspotSpreadC"/>): hotspot minus the coolest of the four die
+    /// sensors. A healthy RTX 5080 Astral measured 4 °C at idle and up to 32 °C at 380 W, so these leave
+    /// room above that. A spread far beyond normal means part of the die isn't being cooled.
+    /// </summary>
+    public double WarnDieSpreadC { get; init; } = 40;
+    public double CriticalDieSpreadC { get; init; } = 50;
 }
 
 /// <summary>
@@ -201,6 +208,10 @@ public sealed class AlertEngine
             Check("temp:core", s.CoreTempC, o.WarnCoreTempC, o.CriticalCoreTempC, "GPU core");
             Check("temp:memory", s.MemoryTempC, o.WarnMemoryTempC, o.CriticalMemoryTempC, "GPU memory");
             Check("temp:hotspot", s.HotspotC, o.WarnHotspotTempC, o.CriticalHotspotTempC, "GPU hotspot");
+            if (s.HotspotSpreadC is double spread)
+                Update("temp:spread", Level(spread, o.WarnDieSpreadC, o.CriticalDieSpreadC), "GPU die spread high",
+                       $"Hotspot {spread:F1} °C above the coolest die sensor (warning {o.WarnDieSpreadC:F0} °C, critical {o.CriticalDieSpreadC:F0} °C). " +
+                       "Part of the die isn't being cooled: check cooler contact and thermal paste.");
         }
     }
 

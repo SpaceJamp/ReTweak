@@ -142,7 +142,9 @@ internal static class SettingsDialog
         var memCrit = Num("Memory temperature critical (°C)", o.CriticalMemoryTempC);
         var hotWarn = Num("Hotspot temperature warning (°C)", o.WarnHotspotTempC);
         var hotCrit = Num("Hotspot temperature critical (°C)", o.CriticalHotspotTempC);
-        foreach (var n in new[] { coreWarn, coreCrit, memWarn, memCrit, hotWarn, hotCrit }) n.SmallChange = 1;
+        var dieWarn = Num("Die spread warning (°C above the coolest sensor)", o.WarnDieSpreadC);
+        var dieCrit = Num("Die spread critical (°C)", o.CriticalDieSpreadC);
+        foreach (var n in new[] { coreWarn, coreCrit, memWarn, memCrit, hotWarn, hotCrit, dieWarn, dieCrit }) n.SmallChange = 1;
         foreach (var n in new[] { spreadWarn, spreadCrit }) n.SmallChange = 5;
         foreach (var n in new[] { lowWarn, lowCrit, highWarn, imbWarn, imbCrit }) n.SmallChange = 0.01;
 
@@ -152,7 +154,7 @@ internal static class SettingsDialog
         var pairs = new (NumberBox, NumberBox?)[]
         {
             (pinWarn, pinCrit), (lowWarn, lowCrit), (highWarn, null), (spreadWarn, spreadCrit), (imbWarn, imbCrit),
-            (coreWarn, coreCrit), (memWarn, memCrit), (hotWarn, hotCrit),
+            (coreWarn, coreCrit), (memWarn, memCrit), (hotWarn, hotCrit), (dieWarn, dieCrit),
         };
         for (int r = 0; r < pairs.Length; r++)
         {
@@ -173,6 +175,7 @@ internal static class SettingsDialog
             coreWarn.Value = d.WarnCoreTempC; coreCrit.Value = d.CriticalCoreTempC;
             memWarn.Value = d.WarnMemoryTempC; memCrit.Value = d.CriticalMemoryTempC;
             hotWarn.Value = d.WarnHotspotTempC; hotCrit.Value = d.CriticalHotspotTempC;
+            dieWarn.Value = d.WarnDieSpreadC; dieCrit.Value = d.CriticalDieSpreadC;
         };
 
         // Fan control
@@ -190,7 +193,9 @@ internal static class SettingsDialog
             Header = "Auto: favour", MinWidth = 220, SelectedIndex = (int)f.SmartPriority,
             ItemsSource = new[] { "Quiet (slow, rare changes)", "Balanced", "Tight (holds within ~1 °C)" },
         };
-        var smartIdle = new ToggleSwitch { Header = "Auto: let the driver stop the fans at idle (0 RPM)", IsOn = f.SmartIdleStop };
+        var smartIdle = new ToggleSwitch { Header = "Auto: 0 RPM at light load (idle, desktop, video)", IsOn = f.SmartIdleStop };
+        var smartIdleBelow = Num("Auto: 0 RPM below (°C hotspot; fans return 5 °C above)", f.SmartIdleStopBelowC);
+        smartIdleBelow.SmallChange = 1;
         var ceiling = Num("Auto: keep the hotspot under (°C, 0 = no ceiling)", f.CeilingC);
         ceiling.SmallChange = 1;
         var adapt = new ToggleSwitch { Header = "Auto: adapt to what you're doing (idle, video, gaming, rendering)", IsOn = f.AdaptToActivity };
@@ -307,7 +312,7 @@ internal static class SettingsDialog
             var d = new FanOptions();
             fanSource.SelectedIndex = (int)d.Source;
             smartHot.Value = d.SmartTargetHotspotC; smartCore.Value = d.SmartTargetCoreC;
-            smartPriority.SelectedIndex = (int)d.SmartPriority; smartIdle.IsOn = d.SmartIdleStop;
+            smartPriority.SelectedIndex = (int)d.SmartPriority; smartIdle.IsOn = d.SmartIdleStop; smartIdleBelow.Value = d.SmartIdleStopBelowC;
             ceiling.Value = d.CeilingC; adapt.IsOn = d.AdaptToActivity; foreground.IsOn = d.UseForegroundApp;
             FillActivities(d.Activities);
             fanFixed.Value = d.FixedPercent; fanHyst.Value = d.HysteresisC;
@@ -340,7 +345,7 @@ internal static class SettingsDialog
             Section("Fan control"), fanNote, Pairs((fanMode, fanSource)), fanFixed,
             Section("Auto"), ceiling, adapt, foreground, activityGrid,
             Caption("When Auto can't tell what you're doing (no load readings), it uses these:"),
-            Pairs((smartHot, smartCore), (smartPriority, null)), smartIdle,
+            Pairs((smartHot, smartCore), (smartPriority, null)), smartIdle, smartIdleBelow,
             Section("Curve"), presetRow, curveGrid, Pairs((fanHyst, smoothing), (rampUp, rampDown)), zeroRpm, zeroBelow,
             Section("Failsafes (all modes that write)"), Pairs((failCore, failHot), (failMem, null)),
             Section("Auto safety net"), assistNote, assist, Pairs((assistHot, assistMem), (assistGap, assistBoost), (assistHold, assistMargin)),
@@ -361,7 +366,7 @@ internal static class SettingsDialog
         dialog.PrimaryButtonClick += async (_, args) =>
         {
             string? problem = null;
-            var boxes = new[] { pinWarn, pinCrit, lowWarn, lowCrit, highWarn, spreadWarn, spreadCrit, imbWarn, imbCrit, coreWarn, coreCrit, memWarn, memCrit, hotWarn, hotCrit };
+            var boxes = new[] { pinWarn, pinCrit, lowWarn, lowCrit, highWarn, spreadWarn, spreadCrit, imbWarn, imbCrit, coreWarn, coreCrit, memWarn, memCrit, hotWarn, hotCrit, dieWarn, dieCrit };
             if (boxes.Any(b => double.IsNaN(b.Value))) problem = "Every threshold needs a number.";
 
             var alerts = current.Alerts with
@@ -381,12 +386,14 @@ internal static class SettingsDialog
                 CriticalMemoryTempC = memCrit.Value,
                 WarnHotspotTempC = hotWarn.Value,
                 CriticalHotspotTempC = hotCrit.Value,
+                WarnDieSpreadC = dieWarn.Value,
+                CriticalDieSpreadC = dieCrit.Value,
             };
             problem ??= AppSettings.Validate(alerts);
 
             var fanBoxes = curveTemps.Concat(curvePcts).Concat(new[]
             {
-                fanFixed, fanHyst, rampUp, rampDown, smoothing, zeroBelow, failCore, failHot, failMem, smartHot, smartCore, ceiling,
+                fanFixed, fanHyst, rampUp, rampDown, smoothing, zeroBelow, failCore, failHot, failMem, smartHot, smartCore, ceiling, smartIdleBelow,
                 assistHot, assistMem, assistGap, assistBoost, assistHold, assistMargin,
             });
             if (problem is null && fanBoxes.Any(b => double.IsNaN(b.Value))) problem = "Every fan setting needs a number.";
@@ -397,6 +404,7 @@ internal static class SettingsDialog
                 SmartTargetCoreC = smartCore.Value,
                 SmartPriority = (SmartPriority)Math.Max(0, smartPriority.SelectedIndex),
                 SmartIdleStop = smartIdle.IsOn,
+                SmartIdleStopBelowC = smartIdleBelow.Value,
                 CeilingC = ceiling.Value,
                 AdaptToActivity = adapt.IsOn,
                 UseForegroundApp = foreground.IsOn,

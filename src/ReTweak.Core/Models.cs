@@ -59,8 +59,12 @@ public sealed record GpuSnapshot(
     double? HotspotMaxC = null,                   // highest hotspot reading in the last second
     uint? DecoderUtilization = null,              // video decode engine load (%)
     uint? EncoderUtilization = null,              // video encode engine load (%)
-    IReadOnlyList<int>? MemoryChipsC = null)       // each memory chip's temperature (PawnIO), when available
+    IReadOnlyList<int>? MemoryChipsC = null,       // each memory chip's temperature (PawnIO), when available
+    double? HotspotSpreadC = null)                // hotspot minus the coolest die sensor, averaged over the last second
 {
+    /// <summary>NVIDIA's die average (thermal channel #6), or null.</summary>
+    public double? DieAverageC => ThermalChannels is { } c && c.Count > NvidiaHotspot.AverageChannel ? c[NvidiaHotspot.AverageChannel] : null;
+
     /// <summary>Best available core temperature: the precise sensor if present, else NVML's integer value.</summary>
     public double? CoreTempC => CoreTempPreciseC ?? TemperatureC;
 

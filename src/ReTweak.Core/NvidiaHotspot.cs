@@ -99,10 +99,33 @@ public sealed class NvidiaHotspot : IDisposable
 
     /// <summary>
     /// The hotspot from one read: channel #5, or the hottest of sensors #1-#4 if #5 wasn't valid.
+    /// Null for a read that contradicts itself: a maximum below the coolest sensor can't be right.
     /// </summary>
-    public static double? Hotspot(IReadOnlyList<double?> channels) =>
-        channels.Count > HotspotChannel && channels[HotspotChannel] is double h ? h
-        : channels.Take(SensorChannels).Max();
+    public static double? Hotspot(IReadOnlyList<double?> channels)
+    {
+        double? coolest = channels.Take(SensorChannels).Min();
+        if (channels.Count > HotspotChannel && channels[HotspotChannel] is double h)
+            return h < coolest ? null : h;
+        return channels.Take(SensorChannels).Max();
+    }
+
+    /// <summary>
+    /// Die spread from one read: the hotspot minus the coolest of the four sensors. Needs all four.
+    /// On a healthy RTX 5080 it grows with power: about 4 °C at idle, 25-32 °C at 300-380 W. A spread
+    /// well beyond that means part of the die isn't being cooled: poor cooler contact or paste pump-out.
+    /// </summary>
+    public static double? Spread(IReadOnlyList<double?> channels)
+    {
+        var sensors = channels.Take(SensorChannels).ToList();
+        if (sensors.Count < SensorChannels || sensors.Any(s => s is null) || Hotspot(channels) is not double h) return null;
+        return h - sensors.Min()!.Value;
+    }
+
+    /// <summary>
+    /// Channel #6 (0xAD0AA4): NVIDIA's own die average. It isn't the plain mean of #1-#4 (it runs
+    /// ~5 °C above it at load), so the hardware presumably weights more sensors.
+    /// </summary>
+    public const int AverageChannel = 5;
 
     /// <summary>Raw channel to °C; null when the valid bit is clear or the value is implausible.</summary>
     public static double? Decode(long raw)

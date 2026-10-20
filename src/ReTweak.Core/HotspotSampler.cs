@@ -5,8 +5,13 @@ namespace ReTweak.Core;
 /// <summary>The last second of hotspot readings, summarised.</summary>
 /// <param name="AverageC">Hotspot averaged over the window: what to show and what the fan curve follows.</param>
 /// <param name="MaxC">Highest hotspot reading in the window: what failsafes and the fan safety net use.</param>
-/// <param name="Channels">Each thermal channel averaged over the window (#1-#4 sensors, #5 their maximum).</param>
-public sealed record HotspotSummary(double AverageC, double MaxC, IReadOnlyList<double?> Channels, int Samples);
+/// <param name="Channels">Each thermal channel averaged over the window (#1-#4 sensors, #5 their maximum, #6 the die average).</param>
+/// <param name="SpreadC">Die spread (hotspot minus the coolest sensor) averaged over the window; null without all four sensors.</param>
+public sealed record HotspotSummary(double AverageC, double MaxC, IReadOnlyList<double?> Channels, int Samples, double? SpreadC = null)
+{
+    /// <summary>NVIDIA's die average (channel #6), or null.</summary>
+    public double? DieAverageC => Channels.Count > NvidiaHotspot.AverageChannel ? Channels[NvidiaHotspot.AverageChannel] : null;
+}
 
 /// <summary>
 /// A sliding window of thermal-channel readings. The hotspot register updates at least
@@ -18,10 +23,13 @@ public sealed class HotspotWindow(TimeSpan length)
 {
     private readonly Queue<(TimeSpan At, double?[] Channels)> _samples = new();
 
-    public void Add(TimeSpan at, double?[] channels)
+    /// <summary>False (and nothing stored) for a read with no usable hotspot, including one that contradicts itself.</summary>
+    public bool Add(TimeSpan at, double?[] channels)
     {
-        _samples.Enqueue((at, channels));
         Trim(at);
+        if (NvidiaHotspot.Hotspot(channels) is null) return false;
+        _samples.Enqueue((at, channels));
+        return true;
     }
 
     /// <summary>Null when the window holds no valid hotspot reading.</summary>
@@ -29,13 +37,14 @@ public sealed class HotspotWindow(TimeSpan length)
     {
         Trim(now);
         var hot = _samples.Select(s => NvidiaHotspot.Hotspot(s.Channels)).OfType<double>().ToList();
+        var spread = _samples.Select(s => NvidiaHotspot.Spread(s.Channels)).OfType<double>().ToList();
         if (hot.Count == 0) return null;
         int count = _samples.Max(s => s.Channels.Length);
         var channels = Enumerable.Range(0, count)
             .Select(i => _samples.Select(s => i < s.Channels.Length ? s.Channels[i] : null).OfType<double>().ToList())
             .Select(v => v.Count > 0 ? v.Average() : (double?)null)
             .ToList();
-        return new HotspotSummary(hot.Average(), hot.Max(), channels, hot.Count);
+        return new HotspotSummary(hot.Average(), hot.Max(), channels, hot.Count, spread.Count > 0 ? spread.Average() : null);
     }
 
     private void Trim(TimeSpan now)
@@ -60,6 +69,7 @@ internal sealed class HotspotSampler : IDisposable
     private readonly CancellationTokenSource _cts = new();
     private readonly Lock _lock = new();
     private int _tick;
+    private long _rejected;
     private int[]? _memoryChips;
     private bool _memoryUnsupported;
 
@@ -102,8 +112,14 @@ internal sealed class HotspotSampler : IDisposable
         }
         if (channels is not null)
         {
-            Diag.Trace(DiagCategory.Hotspot, "raw", new { channelsC = channels, hotspotC = NvidiaHotspot.Hotspot(channels) });
-            lock (_lock) _window.Add(_clock.Elapsed, channels);
+            Diag.Trace(DiagCategory.Hotspot, "raw", new { channelsC = channels, hotspotC = NvidiaHotspot.Hotspot(channels), spreadC = NvidiaHotspot.Spread(channels) });
+            bool kept;
+            lock (_lock) kept = _window.Add(_clock.Elapsed, channels);
+            // A maximum below the coolest sensor is a bad read, not a temperature. Log the first and then
+            // every 600th (once a minute if it never stops) so a log shows it without filling up.
+            if (!kept && channels.Length > NvidiaHotspot.HotspotChannel && channels[NvidiaHotspot.HotspotChannel] is not null
+                && _rejected++ % 600 == 0)
+                Diag.Warn(DiagCategory.Hotspot, "hotspot read rejected: maximum below the coolest sensor", new { channelsC = channels, rejected = _rejected });
         }
 
         // Memory chips change slowly: once a second is plenty. Stop asking if the module says no.

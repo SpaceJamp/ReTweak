@@ -52,6 +52,7 @@ static class Simulate
         StaleCheck();
         TempCheck();
         HotspotDecodeCheck();
+        DieSpreadCheck();
         FanCheck();
         SmartCheck();
         AdaptiveCheck();
@@ -265,6 +266,49 @@ static class Simulate
             if (!pass) _failures++;
             Console.WriteLine($"  {(pass ? "PASS" : "FAIL")}: 0x{raw:X8} ({what}) -> {got?.ToString("F2") ?? "none"}");
         }
+    }
+
+    private static void DieSpreadCheck()
+    {
+        void Check(string what, bool pass, string detail)
+        {
+            if (!pass) _failures++;
+            Console.WriteLine($"  {(pass ? "PASS" : "FAIL")}: {what} ({detail})");
+        }
+        Console.WriteLine("\n== Die spread and self-check of a read");
+        // Real reads from the RTX 5080: idle, and a game at ~350 W.
+        double?[] idle = [37.1, 34.3, 35.3, 38.7, 38.7, 35.6], game = [71.6, 52.3, 45.9, 67.4, 71.6, 63.9];
+        Check("Spread is the hotspot minus the coolest sensor", Math.Abs(NvidiaHotspot.Spread(idle)!.Value - 4.4) < 0.01
+              && Math.Abs(NvidiaHotspot.Spread(game)!.Value - 25.7) < 0.01, $"idle {NvidiaHotspot.Spread(idle):F1}, game {NvidiaHotspot.Spread(game):F1}");
+        double?[] contradicts = [37.1, 34.3, 35.3, 38.7, 30.0, 35.6];
+        Check("A maximum below the coolest sensor is rejected", NvidiaHotspot.Hotspot(contradicts) is null && NvidiaHotspot.Spread(contradicts) is null,
+              $"hotspot {NvidiaHotspot.Hotspot(contradicts)?.ToString("F1") ?? "none"}");
+        double?[] noMax = [37.1, 34.3, 35.3, 38.7, null, null], oneMissing = [37.1, null, 35.3, 38.7, 38.7, 35.6];
+        Check("Without #5 the hottest sensor stands in; the spread needs all four sensors",
+              NvidiaHotspot.Hotspot(noMax) == 38.7 && NvidiaHotspot.Spread(noMax) is double sp && Math.Abs(sp - 4.4) < 0.01
+              && NvidiaHotspot.Spread(oneMissing) is null, $"spread with a sensor missing {NvidiaHotspot.Spread(oneMissing)?.ToString("F1") ?? "none"}");
+
+        var window = new HotspotWindow(TimeSpan.FromSeconds(1));
+        bool keptGood = window.Add(TimeSpan.FromMilliseconds(100), idle), keptBad = window.Add(TimeSpan.FromMilliseconds(200), contradicts);
+        window.Add(TimeSpan.FromMilliseconds(300), [41.1, 34.3, 35.3, 38.7, 41.1, 36.0]);
+        var sum = window.Summarize(TimeSpan.FromMilliseconds(300))!;
+        Check("The window drops a bad read and averages the spread", keptGood && !keptBad && sum.Samples == 2
+              && Math.Abs(sum.SpreadC!.Value - 5.6) < 0.01 && Math.Abs(sum.DieAverageC!.Value - 35.8) < 0.01,
+              $"{sum.Samples} samples, spread {sum.SpreadC:F1}, die average {sum.DieAverageC:F1}");
+
+        var gpu = new GpuInfo(0, "Simulated", 1, 0x2C02, 0x1043, 0x89DE);
+        GpuSnapshot Snap(double? spread) => new(DateTime.Now, gpu, 70, null, null, null, null, null, null,
+                                                [], null, null, null, CoreTempPreciseC: 70, HotspotC: 70, HotspotSpreadC: spread);
+        var o = new AlertOptions();
+        var alerts = new AlertEngine();
+        for (int t = 0; t < 30; t++) alerts.ProcessGpu(Snap(31.6)); // the most a healthy card showed, at 380 W
+        bool quiet = !alerts.Active.Any(a => a.Key == "temp:spread");
+        for (int t = 0; t < 10; t++) alerts.ProcessGpu(Snap(45));
+        var warn = alerts.Active.FirstOrDefault(a => a.Key == "temp:spread")?.Severity;
+        for (int t = 0; t < 10; t++) alerts.ProcessGpu(Snap(55));
+        var crit = alerts.Active.FirstOrDefault(a => a.Key == "temp:spread")?.Severity;
+        Check($"Die-spread alert: none at a healthy 31.6 °C, warning over {o.WarnDieSpreadC:F0}, critical over {o.CriticalDieSpreadC:F0}",
+              quiet && warn == AlertSeverity.Warning && crit == AlertSeverity.Critical, $"{warn}, then {crit}");
     }
 
     /// <summary>A fake card for <see cref="FanController"/>: records writes, can refuse them or be overridden.</summary>
@@ -615,9 +659,26 @@ static class Simulate
         Check("Auto (smart): light load stays at the driver's minimum", light.FanPercent.Skip(120).All(f => f == 30) && light.HotspotC[^1] < 80,
               $"fans {light.FanPercent[^1]}%, hotspot {light.HotspotC[^1]:F1} °C (below target, fans can't go under 30% manually)");
 
-        var idle = RunPlant(smart with { SmartIdleStop = true }, _ => 40, 300);
-        Check("Auto (smart) with idle stop: hands the fans to the driver at idle", idle.Statuses[^1].Percent is null && idle.Statuses[^1].Text.Contains("idle"),
+        var idle = RunPlant(smart with { SmartIdleStop = true }, _ => 40, 300, startC: 40);
+        Check("Auto (smart) with 0 RPM: hands the fans to the driver at idle", idle.Statuses[^1].Percent is null && idle.Statuses[^1].Text.Contains("0 RPM"),
               idle.Statuses[^1].Text);
+
+        // 0 RPM at 40 °C with a driver that really stops the fans: the card warms with no airflow, Auto comes back
+        // at 45 °C, cools it, and lets go again. It should cycle slowly, not chatter.
+        var zero = smart with { SmartIdleStop = true, SmartIdleStopBelowC = 40 };
+        var cycle = RunPlant(zero, _ => 40, 1200, startC: 38, driverSpeed: 0);
+        int stops = cycle.FanPercent.Zip(cycle.FanPercent.Skip(1)).Count(x => x.First > 0 && x.Second == 0);
+        double hottest = cycle.HotspotC.Max();
+        Check("Auto 0 RPM below 40 °C: fans stop, return near 45 °C, and cycle slowly", stops is >= 1 and <= 10 && hottest < 48
+              && cycle.FanPercent.Count(f => f == 0) > 300,
+              $"{stops} stops in 20 min, {cycle.FanPercent.Count(f => f == 0)} s at 0 RPM, hottest {hottest:F1} °C");
+
+        var desk = RunPlant(zero, _ => 40, 300, startC: 36, driverSpeed: 0,
+                            activity: _ => new ActivitySample(22, 10, 0, 0, 0.10, false, "explorer"));
+        Check("Auto 0 RPM also on the desktop (the card idles at ~16% power)",
+              desk.Statuses[30].Activity == ActivityKind.Desktop && desk.FanPercent.Take(40).Any(f => f == 0), desk.Statuses[30].Text);
+        var busy = RunPlant(zero, t => t < 100 ? 40 : 140, 200, startC: 36, driverSpeed: 0);
+        Check("Auto 0 RPM ends when the load passes 30% power", busy.FanPercent.Skip(110).All(f => f >= 30), $"fans {busy.FanPercent[^1]}% at 140 W");
 
         var core = RunPlant(smart, _ => 300, 400, hasHotspot: false);
         double coreErr = core.HotspotC.Skip(240).Select(h => h - 7).Max(c => Math.Abs(c - 72));
