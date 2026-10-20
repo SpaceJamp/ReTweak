@@ -113,6 +113,8 @@ public static class Autostart
     private static readonly LogonTask LogonTask = new("ReTweak");
 
     private static string Exe => Environment.ProcessPath!;
+    /// <summary>This exe is under Program Files, where only administrators can change it.</summary>
+    public static bool IsInstalledCopy => TrustedPaths.IsUnder(Exe, Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles));
     private static string RunKeyCommand => $"\"{Exe}\" {Arguments}";
 
     public static bool IsAdmin => ReTweak.Core.LogonTask.IsElevated;
@@ -163,6 +165,14 @@ public static class Autostart
         {
             if (string.Equals(RunKeyValue, RunKeyCommand, StringComparison.OrdinalIgnoreCase) && LogonTask.Query() is null)
                 Set(true, elevate: false);
+            // Installed to Program Files while the task still starts a copy elsewhere (the build folder): move it here.
+            // Only toward a protected copy, never away from one, so running a dev build doesn't undo an install.
+            else if (LogonTask.Query() is { } task && !string.Equals(task.Command, Exe, StringComparison.OrdinalIgnoreCase) && IsInstalledCopy)
+            {
+                string? why = Set(true, elevate: false);
+                Diag.Info(DiagCategory.App, why is null ? "Start with Windows moved to the installed copy" : "couldn't move Start with Windows to the installed copy",
+                          new { from = task.Command, to = Exe, why });
+            }
         }
         catch (Exception) { /* best effort: the Run-key entry keeps working until the next try */ }
     }

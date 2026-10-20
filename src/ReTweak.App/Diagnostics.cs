@@ -114,7 +114,9 @@ public static class Diagnostics
         if (!TrustedPaths.IsAllowedUserFolder(desktop))
             throw new UnauthorizedAccessException($"The Desktop ({desktop}) isn't a plain folder in your profile; not writing there as administrator.");
         string zipPath = Path.Combine(desktop, $"ReTweak-diagnostics-{BuildInfo.Version}-b{BuildInfo.Build}-{DateTime.Now:yyyyMMdd-HHmmss}.zip");
-        using var zip = ZipFile.Open(zipPath, ZipArchiveMode.Create);
+        ZipArchive zip;
+        using (TrustedPaths.HoldPlainFolder(desktop)) zip = ZipFile.Open(zipPath, ZipArchiveMode.Create); // created new, never through a link
+        using var _ = zip;
 
         var summary = zip.CreateEntry("environment.json");
         using (var w = new StreamWriter(summary.Open()))
@@ -128,10 +130,12 @@ public static class Diagnostics
         // junction or a planted log folder can't make ReTweak copy files only administrators can read into a
         // zip the user can open.
         string settingsFile = Path.Combine(AppSettings.Folder, "settings.json");
-        if (File.Exists(settingsFile) && TrustedPaths.IsAllowedUserFolder(AppSettings.Folder)) AddShared(zip, settingsFile, "settings.json");
+        if (File.Exists(settingsFile) && TrustedPaths.IsAllowedUserFolder(AppSettings.Folder))
+            using (TrustedPaths.HoldPlainFolder(AppSettings.Folder)) AddShared(zip, settingsFile, "settings.json");
         if (Directory.Exists(settings.LogFolder) && TrustedPaths.IsAllowedUserFolder(settings.LogFolder))
-            foreach (var csv in Directory.GetFiles(settings.LogFolder, "retweak-*.csv").OrderByDescending(File.GetLastWriteTime).Take(2))
-                AddShared(zip, csv, "connector-logs/" + Path.GetFileName(csv));
+            using (TrustedPaths.HoldPlainFolder(settings.LogFolder))
+                foreach (var csv in Directory.GetFiles(settings.LogFolder, "retweak-*.csv").OrderByDescending(File.GetLastWriteTime).Take(2))
+                    AddShared(zip, csv, "connector-logs/" + Path.GetFileName(csv));
         return zipPath;
     }
 

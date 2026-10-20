@@ -1,6 +1,8 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Security.AccessControl;
 using System.Security.Principal;
+using Microsoft.Win32.SafeHandles;
 
 namespace ReTweak.Core;
 
@@ -15,7 +17,7 @@ namespace ReTweak.Core;
 /// (HKCU\Software\Classes, App Paths) can't redirect them (<see cref="SystemExe"/>, <see cref="OpenInExplorer"/>).</item>
 /// </list>
 /// </summary>
-public static class TrustedPaths
+public static partial class TrustedPaths
 {
     public static bool IsElevated { get; } = new WindowsPrincipal(WindowsIdentity.GetCurrent()).IsInRole(WindowsBuiltInRole.Administrator);
 
@@ -114,11 +116,88 @@ public static class TrustedPaths
         string folder = Path.GetDirectoryName(Path.GetFullPath(path))!;
         if (!IsPlainPath(folder)) throw new IOException($"{folder} is (or is inside) a junction or symlink; not writing there.");
         Directory.CreateDirectory(folder);
+        using var hold = HoldPlainFolder(folder); // nothing can swap the folders between the check and the write
         string tmp = $"{path}.{Guid.NewGuid():N}.tmp";
         using (var f = new FileStream(tmp, FileMode.CreateNew, FileAccess.Write, FileShare.None))
         using (var w = new StreamWriter(f)) w.Write(contents);
         File.Move(tmp, path, overwrite: true);
     }
+
+    /// <summary>
+    /// Elevated: opens every folder from the user's profile down to <paramref name="folder"/> without delete
+    /// sharing, and checks each is a real folder, not a junction or symlink. While the returned handle is held
+    /// none of them can be renamed, deleted or replaced, so a path checked once stays the same path: this closes
+    /// the race where a process running as the user swaps a folder for a junction between the check and the
+    /// write. Throws if a folder is a link or can't be held (someone else holds it open for deleting).
+    /// Unelevated: nothing to defend against (the app has the user's rights only); holds nothing.
+    /// </summary>
+    public static IDisposable HoldPlainFolder(string folder)
+    {
+        var held = new FolderHold();
+        if (!IsElevated) return held;
+        try
+        {
+            string full = Path.GetFullPath(folder).TrimEnd('\\');
+            string profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile).TrimEnd('\\');
+            if (!IsUnder(full, profile)) throw new UnauthorizedAccessException($"{folder} isn't in your profile; not writing there as administrator.");
+            var chain = new List<string>();
+            for (var d = new DirectoryInfo(full); d is not null; d = d.Parent)
+            {
+                chain.Insert(0, d.FullName.TrimEnd('\\'));
+                if (string.Equals(d.FullName.TrimEnd('\\'), profile, StringComparison.OrdinalIgnoreCase)) break;
+            }
+            foreach (var dir in chain)
+            {
+                // List + read-attributes access, sharing read/write but not delete. The list access matters: Windows
+                // doesn't enforce sharing for an attributes-only open, so that alone wouldn't stop a rename (tested).
+                // OPEN_REPARSE_POINT opens a link itself instead of following it, so the attribute check below sees it.
+                var h = CreateFileW(@"\\?\" + dir, FileListDirectory | FileReadAttributes, FileShareRead | FileShareWrite, 0, OpenExisting,
+                                    FileFlagBackupSemantics | FileFlagOpenReparsePoint, 0);
+                if (h.IsInvalid)
+                {
+                    int err = Marshal.GetLastPInvokeError();
+                    h.Dispose();
+                    throw new IOException($"Couldn't hold {dir} (error {err}); not writing there as administrator.");
+                }
+                held.Handles.Add(h);
+                if (!GetFileInformationByHandleEx(h, FileAttributeTagInfoClass, out var tag, (uint)Marshal.SizeOf<AttributeTagInfo>()))
+                    throw new IOException($"Couldn't check {dir} (error {Marshal.GetLastPInvokeError()}).");
+                var attrs = (FileAttributes)tag.FileAttributes;
+                if ((attrs & FileAttributes.ReparsePoint) != 0 || (attrs & FileAttributes.Directory) == 0)
+                    throw new IOException($"{dir} is a junction, symlink or not a folder; not writing there as administrator.");
+            }
+            return held;
+        }
+        catch
+        {
+            held.Dispose();
+            throw;
+        }
+    }
+
+    private sealed class FolderHold : IDisposable
+    {
+        public readonly List<SafeFileHandle> Handles = [];
+        public void Dispose()
+        {
+            foreach (var h in Handles) h.Dispose();
+            Handles.Clear();
+        }
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct AttributeTagInfo { public uint FileAttributes, ReparseTag; }
+
+    private const uint FileListDirectory = 0x1, FileReadAttributes = 0x80, FileShareRead = 1, FileShareWrite = 2, OpenExisting = 3;
+    private const uint FileFlagBackupSemantics = 0x02000000, FileFlagOpenReparsePoint = 0x00200000;
+    private const int FileAttributeTagInfoClass = 9;
+
+    [LibraryImport("kernel32.dll", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
+    private static partial SafeFileHandle CreateFileW(string name, uint access, uint share, nint security, uint disposition, uint flags, nint template);
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool GetFileInformationByHandleEx(SafeFileHandle file, int infoClass, out AttributeTagInfo info, uint size);
 
     /// <summary>
     /// Opens a folder in Explorer, or with <paramref name="select"/> shows a file selected. Starts

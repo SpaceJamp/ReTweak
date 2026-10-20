@@ -21,10 +21,15 @@ public sealed class CsvLogger : IDisposable
                 throw new UnauthorizedAccessException($"Not logging to {dir}: running as administrator, logs must go to a plain folder in your profile.");
             Directory.CreateDirectory(dir);
         }
-        if (File.Exists(path) && (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
-            throw new IOException($"{path} is a link; not appending to it.");
-        bool fresh = !File.Exists(path);
-        _w = new StreamWriter(path, append: true) { AutoFlush = true };
+        bool fresh;
+        // Held while the file is opened: once open, the handle is the file, whatever happens to the path.
+        using (TrustedPaths.HoldPlainFolder(System.IO.Path.GetDirectoryName(System.IO.Path.GetFullPath(path))!))
+        {
+            if (File.Exists(path) && (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
+                throw new IOException($"{path} is a link; not appending to it.");
+            fresh = !File.Exists(path);
+            _w = new StreamWriter(path, append: true) { AutoFlush = true };
+        }
         if (fresh)
             _w.WriteLine("time," + string.Join(",", Enumerable.Range(1, 6).Select(i => $"v{i},a{i}")) + ",total_a,total_w");
     }

@@ -2,6 +2,9 @@ using System.Reflection;
 
 // ReTweak uses Windows APIs throughout (NVAPI, PawnIO, registry, ACLs): say so, so the platform analyzer is satisfied.
 [assembly: System.Runtime.Versioning.SupportedOSPlatform("windows")]
+// Native DLLs (nvml.dll, kernel32, user32...) come from System32 only, never from the app's own folder or the
+// current directory, so a DLL planted next to an elevated ReTweak can't be loaded in its place.
+[assembly: System.Runtime.InteropServices.DefaultDllImportSearchPaths(System.Runtime.InteropServices.DllImportSearchPath.System32)]
 
 namespace ReTweak.Core;
 

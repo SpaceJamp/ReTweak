@@ -15,8 +15,14 @@
     <!-- Unpackaged: runs as a plain .exe, no MSIX install -->
     <WindowsPackageType>None</WindowsPackageType>
     <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+    <!-- Unpackaged apps still need the MSIX tooling to put ReTweak.pri and the compiled XAML (.xbf) in a publish. -->
+    <EnableMsixTooling>true</EnableMsixTooling>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Assets\ReTweak.ico</ApplicationIcon>
+    <!-- Our own Main (Program.cs): the fan watchdog mode runs before WinUI starts. -->
+    <DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
+    <!-- DOTNET_STARTUP_HOOKS would load any assembly into ReTweak, elevated or not: off. -->
+    <StartupHookSupport>false</StartupHookSupport>
   </PropertyGroup>
 
   <ItemGroup>

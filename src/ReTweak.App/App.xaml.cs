@@ -54,6 +54,9 @@ public partial class App : Application
             monitor = new GpuMonitor();
             Diag.Info(DiagCategory.App, "started", Diagnostics.Describe(monitor, settings));
             _window = new MainWindow(new MainViewModel(monitor, settings));
+            // Elevated, ReTweak may hold the fans at a manual speed: if it's killed, the watchdog hands them back.
+            if (Elevation.IsAdmin && monitor.Gpus.Any(g => monitor.FanCount(g.Index) > 0))
+                Diag.Info(DiagCategory.Fan, FanWatchdog.Start() ? "fan watchdog started" : "fan watchdog couldn't start");
         }
         catch (Exception ex)
         {
@@ -68,14 +71,15 @@ public partial class App : Application
             Diag.Info(DiagCategory.App, "exiting");
             Diag.Shutdown();
         };
-        _ = Task.Run(Autostart.MigrateIfElevated); // old Run-key entry -> elevated logon task
-        if (Diag.IsOn(DiagLevel.Info))
-            _ = Task.Run(() =>
-            {
-                var findings = Diagnostics.RunSecurityCheck(settings);
-                Diag.Write(findings.Any(x => x.Status >= CheckStatus.Warn) ? DiagLevel.Warn : DiagLevel.Info, DiagCategory.App, "security check",
-                           findings.Where(x => x.Status != CheckStatus.Pass).Select(x => new { x.Area, x.Title, status = x.Status.ToString(), x.Detail }));
-            });
+        _ = Task.Run(() =>
+        {
+            Autostart.MigrateIfElevated(); // old Run-key entry -> logon task; build-folder task -> installed copy
+            if (!Diag.IsOn(DiagLevel.Info)) return;
+            // After the migration, so the check sees the task as it now is.
+            var findings = Diagnostics.RunSecurityCheck(settings);
+            Diag.Write(findings.Any(x => x.Status >= CheckStatus.Warn) ? DiagLevel.Warn : DiagLevel.Info, DiagCategory.App, "security check",
+                       findings.Where(x => x.Status != CheckStatus.Pass).Select(x => new { x.Area, x.Title, status = x.Status.ToString(), x.Detail }));
+        });
         if (!minimized) _window.Activate();
     }
 
