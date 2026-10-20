@@ -47,6 +47,7 @@ public sealed class HotspotWindow(TimeSpan length)
 /// <summary>
 /// Reads the hotspot channels every 100 ms on a background thread. <see cref="Summary"/> may be
 /// called from any thread. Owns the <see cref="NvidiaHotspot"/> handle: nothing else should read it.
+/// Also reads the memory-chip temperatures once a second (<see cref="MemoryChips"/>).
 /// </summary>
 internal sealed class HotspotSampler : IDisposable
 {
@@ -58,6 +59,9 @@ internal sealed class HotspotSampler : IDisposable
     private readonly Thread _thread;
     private readonly CancellationTokenSource _cts = new();
     private readonly Lock _lock = new();
+    private int _tick;
+    private int[]? _memoryChips;
+    private bool _memoryUnsupported;
 
     public HotspotSampler(NvidiaHotspot hotspot)
     {
@@ -70,6 +74,12 @@ internal sealed class HotspotSampler : IDisposable
     public HotspotSummary? Summary()
     {
         lock (_lock) return _window.Summarize(_clock.Elapsed);
+    }
+
+    /// <summary>Latest memory-chip temperatures (°C), or null if the GPU doesn't report them.</summary>
+    public int[]? MemoryChips()
+    {
+        lock (_lock) return _memoryChips;
     }
 
     private void Run()
@@ -90,9 +100,26 @@ internal sealed class HotspotSampler : IDisposable
             channels = _hotspot.Read();
             if (channels is null) timer.Fail("ioctl failed");
         }
-        if (channels is null) return;
-        Diag.Trace(DiagCategory.Hotspot, "raw", new { channelsC = channels, hotspotC = NvidiaHotspot.Hotspot(channels) });
-        lock (_lock) _window.Add(_clock.Elapsed, channels);
+        if (channels is not null)
+        {
+            Diag.Trace(DiagCategory.Hotspot, "raw", new { channelsC = channels, hotspotC = NvidiaHotspot.Hotspot(channels) });
+            lock (_lock) _window.Add(_clock.Elapsed, channels);
+        }
+
+        // Memory chips change slowly: once a second is plenty. Stop asking if the module says no.
+        if (_memoryUnsupported || _tick++ % 10 != 0) return;
+        int[]? chips;
+        using (var timer = Diag.Time("pawnio.memory_temperatures"))
+        {
+            chips = _hotspot.ReadMemoryChips();
+            if (chips is null) timer.Fail("no memory sensors");
+        }
+        if (chips is null && _tick == 1)
+        {
+            _memoryUnsupported = true;
+            Diag.Info(DiagCategory.Hotspot, "memory-chip temperatures not available on this GPU");
+        }
+        lock (_lock) _memoryChips = chips;
     }
 
     public void Dispose()

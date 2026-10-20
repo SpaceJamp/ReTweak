@@ -152,6 +152,34 @@ internal static class SettingsDialog
             ItemsSource = new[] { "Quiet (slow, rare changes)", "Balanced", "Tight (holds within ~1 °C)" },
         };
         var smartIdle = new ToggleSwitch { Header = "Auto: let the driver stop the fans at idle (0 RPM)", IsOn = f.SmartIdleStop };
+        var ceiling = Num("Auto: keep the hotspot under (°C, 0 = no ceiling)", f.CeilingC);
+        ceiling.SmallChange = 1;
+        var adapt = new ToggleSwitch { Header = "Auto: adapt to what you're doing (idle, video, gaming, rendering)", IsOn = f.AdaptToActivity };
+        var foreground = new ToggleSwitch
+        {
+            Header = "Auto: look at the foreground app (fullscreen, program name; stays on this PC)", IsOn = f.UseForegroundApp,
+        };
+        var kinds = new[] { ActivityKind.Idle, ActivityKind.Desktop, ActivityKind.Video, ActivityKind.Gaming, ActivityKind.Compute };
+        var styles = new[] { "Quiet", "Balanced", "Tight" };
+        var actTargets = new Dictionary<ActivityKind, NumberBox>();
+        var actStyles = new Dictionary<ActivityKind, ComboBox>();
+        void FillActivities(IReadOnlyDictionary<ActivityKind, ActivityProfile> profiles)
+        {
+            foreach (var k in kinds)
+            {
+                var prof = profiles.TryGetValue(k, out var v) ? v : FanOptions.DefaultActivities[k];
+                actTargets[k].Value = prof.TargetHotspotC;
+                actStyles[k].SelectedIndex = (int)prof.Priority;
+            }
+        }
+        foreach (var k in kinds)
+        {
+            actTargets[k] = Num($"{k}: hotspot target (°C)", 0);
+            actTargets[k].SmallChange = 1;
+            actStyles[k] = new ComboBox { Header = $"{k}: style", ItemsSource = styles, MinWidth = 150 };
+        }
+        FillActivities(f.Activities);
+        var activityGrid = Pairs(kinds.Select(k => ((FrameworkElement)actTargets[k], (FrameworkElement?)actStyles[k])).ToArray());
         var fanSource = new ComboBox
         {
             Header = "Curve follows", MinWidth = 220, SelectedIndex = (int)f.Source,
@@ -241,6 +269,8 @@ internal static class SettingsDialog
             fanSource.SelectedIndex = (int)d.Source;
             smartHot.Value = d.SmartTargetHotspotC; smartCore.Value = d.SmartTargetCoreC;
             smartPriority.SelectedIndex = (int)d.SmartPriority; smartIdle.IsOn = d.SmartIdleStop;
+            ceiling.Value = d.CeilingC; adapt.IsOn = d.AdaptToActivity; foreground.IsOn = d.UseForegroundApp;
+            FillActivities(d.Activities);
             fanFixed.Value = d.FixedPercent; fanHyst.Value = d.HysteresisC;
             rampUp.Value = d.RampUpPerSecond; rampDown.Value = d.RampDownPerSecond; smoothing.Value = d.SmoothingSeconds;
             zeroRpm.IsOn = d.ZeroRpm; zeroBelow.Value = d.ZeroRpmBelowC;
@@ -266,7 +296,9 @@ internal static class SettingsDialog
             Section("Diagnostics"), diagLevel, diagNote, diagButtons,
             Section("Alert thresholds"), grid, reset,
             Section("Fan control"), fanNote, Pairs((fanMode, fanSource)), fanFixed,
-            Section("Auto"), Pairs((smartHot, smartCore), (smartPriority, null)), smartIdle,
+            Section("Auto"), ceiling, adapt, foreground, activityGrid,
+            Caption("When Auto can't tell what you're doing (no load readings), it uses these:"),
+            Pairs((smartHot, smartCore), (smartPriority, null)), smartIdle,
             Section("Curve"), presetRow, curveGrid, Pairs((fanHyst, smoothing), (rampUp, rampDown)), zeroRpm, zeroBelow,
             Section("Failsafes (all modes that write)"), Pairs((failCore, failHot), (failMem, null)),
             Section("Auto safety net"), assistNote, assist, Pairs((assistHot, assistMem), (assistGap, assistBoost), (assistHold, assistMargin)),
@@ -312,7 +344,7 @@ internal static class SettingsDialog
 
             var fanBoxes = curveTemps.Concat(curvePcts).Concat(new[]
             {
-                fanFixed, fanHyst, rampUp, rampDown, smoothing, zeroBelow, failCore, failHot, failMem, smartHot, smartCore,
+                fanFixed, fanHyst, rampUp, rampDown, smoothing, zeroBelow, failCore, failHot, failMem, smartHot, smartCore, ceiling,
                 assistHot, assistMem, assistGap, assistBoost, assistHold, assistMargin,
             });
             if (problem is null && fanBoxes.Any(b => double.IsNaN(b.Value))) problem = "Every fan setting needs a number.";
@@ -323,6 +355,14 @@ internal static class SettingsDialog
                 SmartTargetCoreC = smartCore.Value,
                 SmartPriority = (SmartPriority)Math.Max(0, smartPriority.SelectedIndex),
                 SmartIdleStop = smartIdle.IsOn,
+                CeilingC = ceiling.Value,
+                AdaptToActivity = adapt.IsOn,
+                UseForegroundApp = foreground.IsOn,
+                Activities = kinds.ToDictionary(k => k, k =>
+                {
+                    var old = current.Fans.Activities.TryGetValue(k, out var v) ? v : FanOptions.DefaultActivities[k];
+                    return old with { TargetHotspotC = actTargets[k].Value, Priority = (SmartPriority)Math.Max(0, actStyles[k].SelectedIndex) };
+                }),
                 Source = (FanSource)Math.Max(0, fanSource.SelectedIndex),
                 FixedPercent = (int)Math.Round(fanFixed.Value),
                 Curve = Enumerable.Range(0, CurvePoints).Select(i => new FanPoint(curveTemps[i].Value, (int)Math.Round(curvePcts[i].Value))).ToList(),

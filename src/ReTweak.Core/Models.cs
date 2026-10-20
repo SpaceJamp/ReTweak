@@ -56,8 +56,17 @@ public sealed record GpuSnapshot(
     string? MemoryTempSource = null,
     double? HotspotC = null,                      // RTX 50 hotspot, averaged over the last second (10 Hz)
     IReadOnlyList<double?>? ThermalChannels = null, // each GPU thermal channel, averaged the same way
-    double? HotspotMaxC = null)                   // highest hotspot reading in the last second
+    double? HotspotMaxC = null,                   // highest hotspot reading in the last second
+    uint? DecoderUtilization = null,              // video decode engine load (%)
+    uint? EncoderUtilization = null,              // video encode engine load (%)
+    IReadOnlyList<int>? MemoryChipsC = null)       // each memory chip's temperature (PawnIO), when available
 {
     /// <summary>Best available core temperature: the precise sensor if present, else NVML's integer value.</summary>
     public double? CoreTempC => CoreTempPreciseC ?? TemperatureC;
+
+    /// <summary>Hottest memory chip (PawnIO), or null.</summary>
+    public int? MemoryChipMaxC => MemoryChipsC is { Count: > 0 } c ? c.Max() : null;
+
+    /// <summary>Hottest VRM board sensor (ASUS), or null.</summary>
+    public double? VrmMaxC => BoardTemps?.Where(b => b.Name.StartsWith("VRM")).Select(b => b.Celsius).Max();
 }

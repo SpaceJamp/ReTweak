@@ -138,7 +138,11 @@ static int RunFan(GpuMonitor monitor, string mode, string[] args)
     do
     {
         var s = monitor.Sample(gpu.Index, includeConnector: false);
-        var st = fans.Tick(new FanTemps(s.CoreTempC, s.HotspotC, s.MemoryTempC, s.HotspotMaxC, s.PowerWatts / s.PowerLimitWatts));
+        var fg = ReTweak.Core.Interop.Foreground.Read();
+        var st = fans.Tick(new FanTemps(s.CoreTempC, s.HotspotC, s.MemoryTempC, s.HotspotMaxC, s.PowerWatts / s.PowerLimitWatts,
+                                        s.MemoryChipMaxC, s.VrmMaxC,
+                                        new ActivitySample(s.GpuUtilization, s.MemoryUtilization, s.DecoderUtilization, s.EncoderUtilization,
+                                                           s.PowerWatts / s.PowerLimitWatts, fg.Fullscreen, fg.ProcessName)));
         Console.WriteLine($"{DateTime.Now:HH:mm:ss}  core {s.CoreTempC:F1} °C  fans {string.Join("/", s.FanPercents.Select(f => $"{f}%"))}  {st.Text}");
         if (st.NeedsAdmin) { result = 1; break; } // nothing to do until rerun as administrator
     } while (!done.Wait(1000) && (duration == Timeout.InfiniteTimeSpan || started.Elapsed < duration));

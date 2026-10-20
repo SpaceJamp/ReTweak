@@ -148,6 +148,9 @@ public sealed class GpuMonitor : IDisposable
         int powerRc = Timed("nvml.power", () => Nvml.DeviceGetPowerUsage(h, out mw));
         int limitRc = Timed("nvml.power_limit", () => Nvml.DeviceGetEnforcedPowerLimit(h, out limitMw));
         int vramRc = Timed("nvml.memory_info", () => Nvml.DeviceGetMemoryInfo(h, out vram));
+        uint dec = 0, enc = 0;
+        uint? decoder = Get(Timed("nvml.decoder", () => Nvml.DeviceGetDecoderUtilization(h, out dec, out _)), dec);
+        uint? encoder = Get(Timed("nvml.encoder", () => Nvml.DeviceGetEncoderUtilization(h, out enc, out _)), enc);
 
         var fans = new List<uint>();
         for (uint f = 0; f < d.FanCount; f++)
@@ -199,7 +202,10 @@ public sealed class GpuMonitor : IDisposable
             memSource,
             hotspot?.AverageC,
             hotspot?.Channels,
-            hotspot?.MaxC);
+            hotspot?.MaxC,
+            decoder,
+            encoder,
+            d.Hotspot?.MemoryChips());
         if (Diag.IsOn(DiagLevel.Debug)) LogSnapshot(snapshot, hotspot?.Samples);
         return snapshot;
     }
@@ -214,6 +220,9 @@ public sealed class GpuMonitor : IDisposable
         hotspotMaxC = s.HotspotMaxC,
         hotspotSamples,
         thermalChannelsC = s.ThermalChannels,
+        memoryChipsC = s.MemoryChipsC,
+        decoderPct = s.DecoderUtilization,
+        encoderPct = s.EncoderUtilization,
         memoryC = s.MemoryTempC,
         memorySource = s.MemoryTempSource,
         board = s.BoardTemps?.Select(b => new { b.Name, b.Celsius }),

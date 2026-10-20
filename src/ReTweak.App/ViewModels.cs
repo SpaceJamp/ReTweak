@@ -225,6 +225,7 @@ public sealed partial class MainViewModel : Observable, IDisposable
         if (monitor.FanCount(_gpu) > 0)
         {
             _fan = new FanController(monitor, _gpu);
+            _fan.Airflow.Load(AirflowStore.Load(GpuName)); // what Auto learned about this card last time
             FanSpeedRange = $"Driver allows {_fan.Range.Min}-{_fan.Range.Max} %";
             // A manual speed would outlive ReTweak, so hand the fans back however the process ends.
             AppDomain.CurrentDomain.ProcessExit += (_, _) => _fan.Dispose();
@@ -314,19 +315,41 @@ public sealed partial class MainViewModel : Observable, IDisposable
     {
         if (_fan is null) return;
         FanStatus st;
-        try { st = _fan.Tick(new FanTemps(s.CoreTempC, s.HotspotC, s.MemoryTempC, s.HotspotMaxC, s.PowerWatts / s.PowerLimitWatts)); }
+        var fg = _fan.Options.UseForegroundApp ? ReTweak.Core.Interop.Foreground.Read() : ReTweak.Core.Interop.ForegroundApp.None;
+        var activity = new ActivitySample(s.GpuUtilization, s.MemoryUtilization, s.DecoderUtilization, s.EncoderUtilization,
+                                          s.PowerWatts / s.PowerLimitWatts, fg.Fullscreen, fg.ProcessName);
+        try
+        {
+            st = _fan.Tick(new FanTemps(s.CoreTempC, s.HotspotC, s.MemoryTempC, s.HotspotMaxC, s.PowerWatts / s.PowerLimitWatts,
+                                        s.MemoryChipMaxC, s.VrmMaxC, activity));
+        }
         catch (Exception ex) { st = new(_fan.Options.Mode, null, $"Fan control error: {ex.Message}", AlertSeverity.Warning); }
         FanTempC = st.SourceTempC ?? s.CoreTempC;
         // Unelevated, Auto is simply the driver's curve; mention the safety net quietly instead of
         // nagging with the restart button (that's for Fixed and Curve, which can't work at all).
         bool autoUnelevated = st.Mode == FanMode.Driver && !Elevation.IsAdmin;
         FanStatus = autoUnelevated && _fan.Options.AutoAssist ? "Automatic (driver). The safety net works when ReTweak runs as administrator." : st.Text;
+        var inputs = new List<string> { "core" };
+        if (s.HotspotC is not null) inputs.Add("hotspot + 4 sensors");
+        if (s.MemoryChipsC is { Count: > 0 } chips) inputs.Add($"{chips.Count} memory chips");
+        else if (s.MemoryTempC is not null) inputs.Add("memory");
+        if (s.VrmMaxC is not null) inputs.Add("VRMs");
+        inputs.Add("load, power, video engines");
+        if (_fan.Options.UseForegroundApp) inputs.Add("foreground app");
+        FanInputs = (s.HotspotC is not null ? "Auto sees (PawnIO): " : "Auto sees (install PawnIO for more): ") + string.Join(", ", inputs);
         FanNeedsAdmin = st.NeedsAdmin && !autoUnelevated && !Elevation.IsAdmin;
         FanStatusBrush = st.Severity > AlertSeverity.None ? Theme.For(st.Severity) : st.Mode == FanMode.Driver ? Theme.Muted : Theme.Ok;
         FanChanged?.Invoke();
     }
 
     public FanOptions FanOptions => _settings.Fans;
+    /// <summary>What Auto thinks you're doing right now, and the hotspot target it's holding for it.</summary>
+    public ActivityKind FanActivity => _fan?.Status.Activity ?? ActivityKind.Unknown;
+    public double FanTargetC => FanActivity != ActivityKind.Unknown && FanOptions.Activities.TryGetValue(FanActivity, out var p)
+        ? p.TargetHotspotC : FanOptions.SmartTargetHotspotC;
+    /// <summary>Which sensors Auto can use: more with PawnIO (hotspot, its sensors, memory chips).</summary>
+    private string _fanInputs = "";
+    public string FanInputs { get => _fanInputs; private set => Set(ref _fanInputs, value); }
     public int? FanAppliedPercent => _fan?.Status.Percent;
     /// <summary>Average reported fan speed (%), for the chart while the driver is in charge.</summary>
     public double? CurrentFanPercent { get; private set; }
@@ -392,6 +415,7 @@ public sealed partial class MainViewModel : Observable, IDisposable
     public void Dispose()
     {
         _timer.Stop();
+        if (_fan is not null) AirflowStore.Save(GpuName, _fan.Airflow.Corrections);
         _fan?.Dispose(); // back to the driver's curve before NVML shuts down
         _sampler?.Dispose();
         _monitor.Dispose();

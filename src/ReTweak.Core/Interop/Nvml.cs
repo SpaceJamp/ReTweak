@@ -70,6 +70,14 @@ internal static partial class Nvml
     [LibraryImport(Lib, EntryPoint = "nvmlDeviceGetUtilizationRates")]
     public static partial int DeviceGetUtilizationRates(nint device, out Utilization util);
 
+    /// <summary>Video decode engine load (%); a video playing shows here, not in GPU load.</summary>
+    [LibraryImport(Lib, EntryPoint = "nvmlDeviceGetDecoderUtilization")]
+    public static partial int DeviceGetDecoderUtilization(nint device, out uint percent, out uint samplingPeriodUs);
+
+    /// <summary>Video encode engine load (%): streaming, recording, transcoding.</summary>
+    [LibraryImport(Lib, EntryPoint = "nvmlDeviceGetEncoderUtilization")]
+    public static partial int DeviceGetEncoderUtilization(nint device, out uint percent, out uint samplingPeriodUs);
+
     [LibraryImport(Lib, EntryPoint = "nvmlDeviceGetMemoryInfo")]
     public static partial int DeviceGetMemoryInfo(nint device, out Memory mem);
 
