@@ -28,7 +28,8 @@ public readonly record struct ActivitySample(double? GpuLoad, double? MemoryLoad
 /// <item>Compute: a known render/AI/encode program with real GPU load; or the encoder busy outside a
 /// fullscreen app; or very high, steady load (power varies little) outside a fullscreen app.</item>
 /// <item>Video: the decode engine busy while the 3D load stays moderate.</item>
-/// <item>Gaming: a fullscreen app with real GPU load; or high load whose power swings frame to frame.</item>
+/// <item>Gaming: a fullscreen app with real GPU load (not a browser or media player); or high load whose
+/// power swings frame to frame.</item>
 /// <item>Idle: next to no load or power.</item>
 /// <item>Desktop: anything else.</item>
 /// </list>
@@ -45,6 +46,18 @@ public sealed class ActivityClassifier
         "blender", "python", "ffmpeg", "handbrake", "resolve", "comfyui", "ollama", "lmstudio", "stable",
         "octane", "redshift", "vray", "keyshot", "unreal", "furmark", "cinebench", "octanebench", "tensor",
         "topaz", "premiere", "afterfx", "mediaencoder", "obs64", "kdenlive", "whisper",
+    ];
+
+    /// <summary>
+    /// Programs that go fullscreen without being games: browsers and media players. Fullscreen Chrome at
+    /// ~25% load (a video whose decoding barely shows on the decoder) was counted as Gaming (diagnostic
+    /// log, 2026-10-20). They can still count as Gaming through the swinging-load rule (a browser game).
+    /// </summary>
+    private static readonly string[] FullscreenNotGames =
+    [
+        "chrome", "msedge", "firefox", "brave", "opera", "vivaldi", "arc", "librewolf", "waterfox",
+        "vlc", "mpc-hc", "mpc-be", "mpv", "potplayer", "wmplayer", "video.ui", "media.player", "kodi", "plex",
+        "netflix", "spotify", "powerpnt", "acrobat",
     ];
 
     private readonly Queue<ActivitySample> _recent = new();
@@ -102,7 +115,8 @@ public sealed class ActivityClassifier
         if (enc >= 20 && !fullscreen) return (ActivityKind.Compute, $"video encoder at {enc:F0}%");
         if (load >= 85 && swing < 0.03 && !fullscreen) return (ActivityKind.Compute, $"steady {load:F0}% load");
         if (dec >= 5 && load < 50) return (ActivityKind.Video, $"video decoder at {dec:F0}%");
-        if (fullscreen && load >= 25) return (ActivityKind.Gaming, $"fullscreen {app} at {load:F0}% load");
+        bool notGame = FullscreenNotGames.Any(a => app.Contains(a, StringComparison.OrdinalIgnoreCase));
+        if (fullscreen && load >= 25 && !notGame) return (ActivityKind.Gaming, $"fullscreen {app} at {load:F0}% load");
         if (load >= 40 && swing >= 0.03) return (ActivityKind.Gaming, $"{load:F0}% load, power swinging ±{swing * 100:F0}%");
         if (load < 5 && (power ?? 0) < 0.15 && (dec ?? 0) < 2) return (ActivityKind.Idle, $"{load:F0}% load");
         return (ActivityKind.Desktop, $"{load:F0}% load");

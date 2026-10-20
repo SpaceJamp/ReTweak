@@ -754,6 +754,8 @@ static class Simulate
             ("browsing", Repeat(20, i => S(12 + i % 3, 0.12)), ActivityKind.Desktop),
             ("video in a browser (decoder busy)", Repeat(20, _ => S(14, 0.14, dec: 22, app: "chrome")), ActivityKind.Video),
             ("fullscreen game", Repeat(20, i => S(72 + i % 9, 0.6 + (i % 4) * 0.06, fs: true, app: "Cyberpunk2077")), ActivityKind.Gaming),
+            ("fullscreen Chrome at 25% load, decoder idle (a real log): not a game", Repeat(20, _ => S(25, 0.27, dec: 1, fs: true, app: "chrome")), ActivityKind.Desktop),
+            ("browser game: fullscreen Chrome with swinging load still counts", Repeat(20, i => S(60 + i % 9, 0.5 + (i % 4) * 0.06, fs: true, app: "chrome")), ActivityKind.Gaming),
             ("windowed game (power swings frame to frame)", Repeat(20, i => S(65 + i % 15, 0.5 + (i % 3) * 0.08, app: "eldenring")), ActivityKind.Gaming),
             ("Blender render", Repeat(20, _ => S(97, 0.92, app: "blender")), ActivityKind.Compute),
             ("steady 99% job, not fullscreen", Repeat(20, _ => S(99, 0.95, app: "someworker")), ActivityKind.Compute),

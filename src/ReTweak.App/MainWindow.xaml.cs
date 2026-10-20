@@ -304,7 +304,7 @@ public sealed partial class MainWindow : Window
             canvas.Children.Add(zone);
             var t = new TextBlock { Text = "0 RPM", FontSize = 11, Foreground = label };
             Canvas.SetLeft(t, left + 4);
-            Canvas.SetTop(t, top + 2);
+            Canvas.SetTop(t, bottom - 18); // bottom corner: the mode description sits in the top-left
             canvas.Children.Add(t);
         }
 

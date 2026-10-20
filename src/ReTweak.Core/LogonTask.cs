@@ -35,15 +35,27 @@ public sealed partial class LogonTask(string name)
     public bool Register(string exePath, string arguments, bool elevate, out string? error)
     {
         // The XML sits in the user's temp folder while an elevated schtasks reads it. Create it new under an
-        // unpredictable name and keep it open without write/delete sharing until schtasks is done, so nothing
-        // can swap its contents; then check that what got registered really is this program.
+        // unpredictable name, then hold it open read-only without write/delete sharing until schtasks is done,
+        // so nothing can swap its contents; then check that what got registered really is this program.
+        // The hold must be read-only: schtasks won't open a file someone has open for writing ("being used by
+        // another process"), which broke Start with Windows when the hold kept the write handle.
         string xml = Path.Combine(Path.GetTempPath(), $"{Name}-task-{Guid.NewGuid():N}.xml");
         try
         {
-            using var hold = new FileStream(xml, FileMode.CreateNew, FileAccess.Write, FileShare.Read);
             var bytes = Encoding.Unicode.GetPreamble().Concat(Encoding.Unicode.GetBytes(Xml(exePath, arguments))).ToArray(); // UTF-16 with a BOM
-            hold.Write(bytes);
-            hold.Flush(flushToDisk: true);
+            using (var write = new FileStream(xml, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            {
+                write.Write(bytes);
+                write.Flush(flushToDisk: true);
+            }
+            using var hold = new FileStream(xml, FileMode.Open, FileAccess.Read, FileShare.Read);
+            // Between closing and reopening, something could have replaced the file: check it's still ours.
+            var check = new byte[bytes.Length + 1];
+            if (hold.ReadAtLeast(check, check.Length, throwOnEndOfStream: false) != bytes.Length || !check.AsSpan(0, bytes.Length).SequenceEqual(bytes))
+            {
+                error = "The task file changed before it could be registered.";
+                return false;
+            }
             if (!Schtasks(["/Create", "/TN", Name, "/XML", xml, "/F"], elevate, out error)) return false;
             if (Query() is not { } t || !string.Equals(t.Command, exePath, StringComparison.OrdinalIgnoreCase) || t.Arguments != arguments)
             {
