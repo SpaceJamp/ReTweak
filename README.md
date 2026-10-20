@@ -12,7 +12,9 @@ going wrong.
 - **Temperatures**: precise core (0.01 °C) and memory on RTX 50; on ASUS cards, memory comes from the
   board sensors GPU Tweak III uses, plus 8 board sensors (VRM, core, memory and more)
 - **Early-warning alerts**: pin over-current, low/high voltage, pin-to-pin voltage spread, current imbalance, fast voltage drops or current ramps, frozen sensor, high core, memory or hotspot temperature
-- **Fan control**: Auto (driver) with a safety net, a fixed speed, or a 5-point curve (drag the points
+- **Fan control**: **Auto** is ReTweak's own controller: it holds the hotspot at a target (80 °C by
+  default; the core at 72 °C without PawnIO), speeding the fans up as soon as board power rises and
+  trimming the remaining error, with Quiet / Balanced / Tight tuning. Also: Driver (the card's own curve) with a safety net, a fixed speed, or a 5-point curve (drag the points
   on the dashboard, or pick Quiet / Balanced / Performance). The curve can follow the core, hotspot,
   memory or the hottest of them; speed changes are ramped and the temperature averaged so the fans don't
   step on short spikes; optional 0 RPM below a temperature you choose. Full speed at a core, hotspot or
@@ -23,13 +25,13 @@ going wrong.
 - Optional start with Windows as administrator (`--minimized`, tray only; see below), CSV logging and adjustable thresholds in Settings
   (stored in `%LocalAppData%\ReTweak\settings.json`)
 
-Monitoring is read-only. The one thing ReTweak writes to the GPU is fan speed: always in Fixed
-and Curve, and in Auto only when the safety net steps in (hotspot or memory too hot; you can turn
-it off in Settings). All of these need ReTweak to run as administrator:
+Monitoring is read-only. The one thing ReTweak writes to the GPU is fan speed: always in Auto,
+Fixed and Curve, and in Driver mode only when the safety net steps in (hotspot or memory too hot;
+you can turn it off in Settings). All of these need ReTweak to run as administrator:
 
 - It uses NVML's documented fan calls and needs administrator rights (the dashboard offers
   *Restart as administrator*). Start with Windows starts it elevated (see below).
-- Switching to Auto, exiting, losing the temperature reading for 3 s or a failed write hands
+- Switching to Driver, exiting, losing the temperature reading for 3 s or a failed write hands
   the fans back to the driver's own curve. At the failsafe temperature (88 °C by default)
   the fans go to 100%.
 - If ReTweak is killed outright (Task Manager, crash), the last manual speed stays until the next
@@ -82,7 +84,7 @@ dotnet run --project src/ReTweak.Cli -- --replay logs/run.csv   # re-check a log
 dotnet run --project src/ReTweak.Cli -- --simulate              # scripted failure scenarios (no hardware)
 dotnet run --project src/ReTweak.Cli -- --bench                 # sensor latency and noise
 dotnet run --project src/ReTweak.Cli -- --fans                  # fan count, range, speeds
-dotnet run --project src/ReTweak.Cli -- --fan curve             # drive fans (60 = fixed 60%), admin; Ctrl+C restores
+dotnet run --project src/ReTweak.Cli -- --fan smart             # Auto controller (curve, or 60 = fixed 60%), admin; Ctrl+C restores
 dotnet run --project src/ReTweak.Cli -- --fan auto              # hand fans back to the driver
 python tools/analyze_load.py logs/run.csv
 ```

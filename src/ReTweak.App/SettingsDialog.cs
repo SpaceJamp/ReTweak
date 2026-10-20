@@ -102,9 +102,18 @@ internal static class SettingsDialog
         var f = current.Fans;
         var fanMode = new ComboBox
         {
-            Header = "Fan mode", MinWidth = 220, SelectedIndex = (int)f.Mode,
-            ItemsSource = new[] { "Auto (driver, with safety net)", "Fixed speed", "Curve" },
+            Header = "Fan mode", MinWidth = 220, SelectedIndex = Math.Max(0, Array.IndexOf(MainViewModel.FanModeOrder, f.Mode)),
+            ItemsSource = new[] { "Auto (ReTweak holds a target)", "Driver (card's curve + safety net)", "Fixed speed", "Curve" },
         };
+        var smartHot = Num("Auto: hold the hotspot at (°C)", f.SmartTargetHotspotC);
+        var smartCore = Num("Auto: without a hotspot, hold the core at (°C)", f.SmartTargetCoreC);
+        foreach (var n in new[] { smartHot, smartCore }) n.SmallChange = 1;
+        var smartPriority = new ComboBox
+        {
+            Header = "Auto: favour", MinWidth = 220, SelectedIndex = (int)f.SmartPriority,
+            ItemsSource = new[] { "Quiet (slow, rare changes)", "Balanced", "Tight (holds within ~1 °C)" },
+        };
+        var smartIdle = new ToggleSwitch { Header = "Auto: let the driver stop the fans at idle (0 RPM)", IsOn = f.SmartIdleStop };
         var fanSource = new ComboBox
         {
             Header = "Curve follows", MinWidth = 220, SelectedIndex = (int)f.Source,
@@ -192,6 +201,8 @@ internal static class SettingsDialog
         {
             var d = new FanOptions();
             fanSource.SelectedIndex = (int)d.Source;
+            smartHot.Value = d.SmartTargetHotspotC; smartCore.Value = d.SmartTargetCoreC;
+            smartPriority.SelectedIndex = (int)d.SmartPriority; smartIdle.IsOn = d.SmartIdleStop;
             fanFixed.Value = d.FixedPercent; fanHyst.Value = d.HysteresisC;
             rampUp.Value = d.RampUpPerSecond; rampDown.Value = d.RampDownPerSecond; smoothing.Value = d.SmoothingSeconds;
             zeroRpm.IsOn = d.ZeroRpm; zeroBelow.Value = d.ZeroRpmBelowC;
@@ -216,6 +227,7 @@ internal static class SettingsDialog
             Section("Logging"), log, logFolder, logNote,
             Section("Alert thresholds"), grid, reset,
             Section("Fan control"), fanNote, Pairs((fanMode, fanSource)), fanFixed,
+            Section("Auto"), Pairs((smartHot, smartCore), (smartPriority, null)), smartIdle,
             Section("Curve"), presetRow, curveGrid, Pairs((fanHyst, smoothing), (rampUp, rampDown)), zeroRpm, zeroBelow,
             Section("Failsafes (all modes that write)"), Pairs((failCore, failHot), (failMem, null)),
             Section("Auto safety net"), assistNote, assist, Pairs((assistHot, assistMem), (assistGap, assistBoost), (assistHold, assistMargin)),
@@ -261,13 +273,17 @@ internal static class SettingsDialog
 
             var fanBoxes = curveTemps.Concat(curvePcts).Concat(new[]
             {
-                fanFixed, fanHyst, rampUp, rampDown, smoothing, zeroBelow, failCore, failHot, failMem,
+                fanFixed, fanHyst, rampUp, rampDown, smoothing, zeroBelow, failCore, failHot, failMem, smartHot, smartCore,
                 assistHot, assistMem, assistGap, assistBoost, assistHold, assistMargin,
             });
             if (problem is null && fanBoxes.Any(b => double.IsNaN(b.Value))) problem = "Every fan setting needs a number.";
             var fans = current.Fans with
             {
-                Mode = (FanMode)Math.Max(0, fanMode.SelectedIndex),
+                Mode = MainViewModel.FanModeOrder[Math.Max(0, fanMode.SelectedIndex)],
+                SmartTargetHotspotC = smartHot.Value,
+                SmartTargetCoreC = smartCore.Value,
+                SmartPriority = (SmartPriority)Math.Max(0, smartPriority.SelectedIndex),
+                SmartIdleStop = smartIdle.IsOn,
                 Source = (FanSource)Math.Max(0, fanSource.SelectedIndex),
                 FixedPercent = (int)Math.Round(fanFixed.Value),
                 Curve = Enumerable.Range(0, CurvePoints).Select(i => new FanPoint(curveTemps[i].Value, (int)Math.Round(curvePcts[i].Value))).ToList(),

@@ -260,7 +260,7 @@ public sealed partial class MainWindow : Window
             canvas.Children.Add(t);
         }
         // Axis titles.
-        var axisSource = o.Mode == FanMode.Auto ? FanSource.Core : o.Source;
+        var axisSource = o.Mode switch { FanMode.Driver => FanSource.Core, FanMode.Smart => FanSource.Hotspot, _ => o.Source };
         var xTitle = Label($"{FanOptions.SourceName(axisSource) switch { "core" => "GPU core", "hottest" => "Hottest sensor", var n => char.ToUpper(n[0]) + n[1..] }} temperature (°C)", 12);
         xTitle.Foreground = axis;
         xTitle.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
@@ -279,7 +279,7 @@ public sealed partial class MainWindow : Window
         double? failsafeC = o.Source == FanSource.Core ? o.FailsafeTempC
                           : o.Source == FanSource.Hotspot ? o.FailsafeHotspotC
                           : o.Source == FanSource.Memory ? o.FailsafeMemoryC : null;
-        if (o.Mode != FanMode.Auto && failsafeC is double fs)
+        if (o.Mode != FanMode.Driver && failsafeC is double fs)
             canvas.Children.Add(new Line
             {
                 X1 = X(fs), X2 = X(fs), Y1 = top, Y2 = bottom,
@@ -299,7 +299,35 @@ public sealed partial class MainWindow : Window
             canvas.Children.Add(t);
         }
 
-        if (o.Mode != FanMode.Auto)
+        if (o.Mode == FanMode.Smart)
+        {
+            // No curve: Auto finds the speed itself. Show the target it holds and its dead band.
+            var tune = FanOptions.SmartTuning.For(o.SmartPriority);
+            double target = o.SmartTargetHotspotC;
+            var band = new Rectangle
+            {
+                Width = Math.Max(1, X(target + tune.DeadbandC) - X(target - tune.DeadbandC)), Height = h,
+                Fill = Theme.Info, Opacity = 0.12,
+            };
+            Canvas.SetLeft(band, X(target - tune.DeadbandC));
+            Canvas.SetTop(band, top);
+            canvas.Children.Add(band);
+            canvas.Children.Add(new Line
+            {
+                X1 = X(target), X2 = X(target), Y1 = top, Y2 = bottom,
+                Stroke = Theme.Info, StrokeThickness = 2, StrokeDashArray = [4, 3],
+            });
+            var t = new TextBlock
+            {
+                Text = $"Auto holds the hotspot at {target:F0} °C ({o.SmartPriority}); without PawnIO, the core at {o.SmartTargetCoreC:F0} °C. " +
+                       "Fan speed follows load and corrects the remaining error.",
+                FontSize = 11, Foreground = label, TextWrapping = TextWrapping.Wrap, Width = Math.Max(0, X(target) - left - 12),
+            };
+            Canvas.SetLeft(t, left + 4);
+            Canvas.SetTop(t, top + 2);
+            canvas.Children.Add(t);
+        }
+        else if (o.Mode != FanMode.Driver)
         {
             var preview = o with { Curve = curve };
             var line = new Polyline { Stroke = Theme.Info, StrokeThickness = 2, StrokeLineJoin = PenLineJoin.Round };
@@ -349,7 +377,7 @@ public sealed partial class MainWindow : Window
         if (ViewModel.FanTempC is not double now) { dot.Visibility = Visibility.Collapsed; return; }
         double pct = ViewModel.FanAppliedPercent ?? ViewModel.CurrentFanPercent ?? 0;
         dot.Visibility = Visibility.Visible;
-        dot.Fill = o.Mode != FanMode.Auto || ViewModel.FanAppliedPercent is not null ? Theme.Ok : Theme.Muted;
+        dot.Fill = o.Mode != FanMode.Driver || ViewModel.FanAppliedPercent is not null ? Theme.Ok : Theme.Muted;
         Canvas.SetLeft(dot, FanX(now) - dot.Width / 2);
         Canvas.SetTop(dot, FanY(pct) - dot.Height / 2);
     }

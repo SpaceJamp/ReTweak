@@ -53,6 +53,7 @@ static class Simulate
         TempCheck();
         HotspotDecodeCheck();
         FanCheck();
+        SmartCheck();
 
         Console.WriteLine(_failures == 0 ? "\nAll scenarios passed." : $"\n{_failures} scenario(s) FAILED.");
         return _failures;
@@ -359,7 +360,7 @@ static class Simulate
         using (var fc = fake.Make(curve))
         {
             fake.Tick(fc, 60);
-            fc.Options = curve with { Mode = FanMode.Auto };
+            fc.Options = curve with { Mode = FanMode.Driver };
             fake.Tick(fc, 60);
             fake.Tick(fc, 60);
             Check("Switch Curve -> Auto", fake.Speed is null && fake.Restores == 1 && fake.Writes == 1,
@@ -445,7 +446,7 @@ static class Simulate
         }
 
         // ---- Auto safety net ----
-        var auto = curve with { Mode = FanMode.Auto, AutoAssist = true };
+        var auto = curve with { Mode = FanMode.Driver, AutoAssist = true };
         fake = new FakeFans { DriverSpeed = 40 };
         using (var fc = fake.Make(auto))
         {
@@ -500,14 +501,14 @@ static class Simulate
                   $"average 70 °C, peak 78 °C -> curve {fromAverage}%; peak 106 °C -> {st.Text}");
         }
         fake = new FakeFans { DriverSpeed = 40 };
-        using (var fc = fake.Make(curve with { Mode = FanMode.Auto, AutoAssist = true }))
+        using (var fc = fake.Make(curve with { Mode = FanMode.Driver, AutoAssist = true }))
         {
             var st = fc.Tick(new FanTemps(75, HotspotC: 88, HotspotMaxC: 96));
             Check("Auto safety net steps in on a 96 °C peak (average 88 °C)", st.Assisting && fake.Speed == 60, st.Text);
         }
 
         fake = new FakeFans { DriverSpeed = 40 };
-        using (var fc = fake.Make(curve with { Mode = FanMode.Auto, AutoAssist = true }))
+        using (var fc = fake.Make(curve with { Mode = FanMode.Driver, AutoAssist = true }))
         {
             fake.Tick(fc, 70, hotspot: 96);
             for (int i = 0; i < FanController.MissedTempsBeforeRelease; i++) fake.Tick(fc, null);
@@ -538,6 +539,98 @@ static class Simulate
               $"logged read -> {fromCh5} °C (HWMonitor's #1 would say 35.9); #5 invalid -> {fallback} °C from sensor #2");
         Check("Hotspot window: 1 s average and peak, empties when reads stop", windowOk && stale is null,
               $"40/46 °C alternating -> average {sum.AverageC:F1}, peak {sum.MaxC:F1}, {sum.Samples} samples; 4 s later: {(stale is null ? "empty" : "not empty")}");
+    }
+
+    /// <summary>
+    /// A rough GPU thermal model for closed-loop tests: board power heats the die, airflow from
+    /// the fans cools it. Calibrated so 300 W needs ~40% fan for an 80 °C hotspot and 30% fans let
+    /// it reach ~90 °C, close to an RTX 5080 Astral. Readings get the hotspot's ±1.5 °C jitter.
+    /// </summary>
+    private sealed record PlantRun(List<double> HotspotC, List<int> FanPercent, List<FanStatus> Statuses);
+
+    private static PlantRun RunPlant(FanOptions o, Func<int, double> watts, int seconds, double startC = 50, int driverSpeed = 30,
+                                     bool hasHotspot = true, bool refuse = false)
+    {
+        const double ambient = 30, heatCapacity = 150, powerLimit = 400;
+        var fake = new FakeFans { DriverSpeed = driverSpeed, Refuse = refuse ? "needs administrator rights" : null };
+        var rng = new Random(42);
+        var run = new PlantRun([], [], []);
+        double hot = startC;
+        using var fc = fake.Make(o, range: (30, 100));
+        for (int t = 0; t < seconds; t++)
+        {
+            double w = watts(t);
+            int fan = fake.Speed ?? driverSpeed;
+            double conductance = 2 + 10 * fan / 100.0; // W per °C above ambient
+            hot += (w - conductance * (hot - ambient)) / heatCapacity;
+            double noisy = hot + (rng.NextDouble() - 0.5) * 3;
+            fake.Now += TimeSpan.FromSeconds(1);
+            run.Statuses.Add(fc.Tick(new FanTemps(hot - 7, hasHotspot ? noisy : null, null, hasHotspot ? noisy + 1 : null, w / powerLimit)));
+            run.HotspotC.Add(hot);
+            run.FanPercent.Add(fake.Speed ?? driverSpeed);
+        }
+        return run;
+    }
+
+    private static int SpeedChanges(IEnumerable<int> fan) => fan.Zip(fan.Skip(1)).Count(x => x.First != x.Second);
+
+    private static void SmartCheck()
+    {
+        var smart = new FanOptions { Mode = FanMode.Smart }; // hotspot target 80 °C, Balanced
+
+        var steady = RunPlant(smart, _ => 300, 400);
+        var tail = steady.HotspotC.Skip(240).ToList();
+        double meanErr = tail.Average(h => Math.Abs(h - 80)), maxErr = tail.Max(h => Math.Abs(h - 80));
+        Check("Auto (smart): steady 300 W, from 50 °C", meanErr <= 1.5 && maxErr <= 3,
+              $"last 160 s: hotspot within {maxErr:F1} °C of 80 (mean {meanErr:F1}), fans {steady.FanPercent[^1]}%, " +
+              $"{SpeedChanges(steady.FanPercent.Skip(240))} speed changes; {steady.Statuses[^1].Text}");
+
+        var step = RunPlant(smart, t => t < 200 ? 150 : 400, 520, startC: 60);
+        double peak = step.HotspotC.Skip(200).Max();
+        double settled = step.HotspotC.Skip(400).Max(h => Math.Abs(h - 80));
+        int fanAtStep = step.FanPercent[199], fanAfter = step.FanPercent[205];
+        Check("Auto (smart): load step 150 -> 400 W", peak <= 85 && settled <= 3 && fanAfter > fanAtStep,
+              $"fans {fanAtStep}% -> {fanAfter}% within 5 s of the step (power feed-forward), peak {peak:F1} °C, " +
+              $"within {settled:F1} °C of 80 two minutes later");
+
+        var drop = RunPlant(smart, t => t < 200 ? 400 : 150, 480, startC: 80);
+        double dip = drop.HotspotC.Skip(200).Min();
+        Check("Auto (smart): load drop 400 -> 150 W", drop.HotspotC.Skip(380).All(h => h <= 82) && dip >= 60,
+              $"fans {drop.FanPercent[199]}% -> {drop.FanPercent[^1]}%, lowest {dip:F1} °C, no overshoot back above target");
+
+        var light = RunPlant(smart, _ => 60, 300);
+        Check("Auto (smart): light load stays at the driver's minimum", light.FanPercent.Skip(120).All(f => f == 30) && light.HotspotC[^1] < 80,
+              $"fans {light.FanPercent[^1]}%, hotspot {light.HotspotC[^1]:F1} °C (below target, fans can't go under 30% manually)");
+
+        var idle = RunPlant(smart with { SmartIdleStop = true }, _ => 40, 300);
+        Check("Auto (smart) with idle stop: hands the fans to the driver at idle", idle.Statuses[^1].Percent is null && idle.Statuses[^1].Text.Contains("idle"),
+              idle.Statuses[^1].Text);
+
+        var core = RunPlant(smart, _ => 300, 400, hasHotspot: false);
+        double coreErr = core.HotspotC.Skip(240).Select(h => h - 7).Max(c => Math.Abs(c - 72));
+        Check("Auto (smart) without a hotspot holds the core at 72 °C", coreErr <= 3 && core.Statuses[^1].Text.Contains("core"),
+              $"core within {coreErr:F1} °C of 72; {core.Statuses[^1].Text}");
+
+        var quiet = RunPlant(smart with { SmartPriority = SmartPriority.Quiet }, t => 250 + 60 * Math.Sin(t / 20.0), 500);
+        var tight = RunPlant(smart with { SmartPriority = SmartPriority.Tight }, t => 250 + 60 * Math.Sin(t / 20.0), 500);
+        double Rms(PlantRun r) => Math.Sqrt(r.HotspotC.Skip(200).Average(h => (h - 80) * (h - 80)));
+        Check("Auto (smart): Tight holds closer, Quiet changes speed less (varying load)",
+              Rms(tight) < Rms(quiet) && SpeedChanges(quiet.FanPercent.Skip(200)) < SpeedChanges(tight.FanPercent.Skip(200)),
+              $"RMS error Quiet {Rms(quiet):F1} / Tight {Rms(tight):F1} °C; speed changes Quiet {SpeedChanges(quiet.FanPercent.Skip(200))} / Tight {SpeedChanges(tight.FanPercent.Skip(200))}");
+
+        var bumpless = RunPlant(smart, _ => 300, 3, startC: 80, driverSpeed: 55);
+        Check("Auto (smart) takes over from wherever the driver had the fans", Math.Abs(bumpless.FanPercent[0] - 55) <= 10,
+              $"driver at 55% -> first write {bumpless.FanPercent[0]}%");
+
+        var hot = RunPlant(smart, _ => 300, 3, startC: 104);
+        bool failsafeHit = hot.Statuses.Any(s => s.Text.StartsWith("Full speed")) && hot.FanPercent.Contains(100);
+        Check("Auto (smart): hotspot failsafe still goes straight to 100%", failsafeHit, hot.Statuses.First(s => s.Text.StartsWith("Full") || true).Text);
+
+        var denied = RunPlant(smart, _ => 300, 3, refuse: true);
+        Check("Auto (smart) without administrator rights", denied.Statuses[^1].NeedsAdmin && denied.FanPercent.All(f => f == 30), denied.Statuses[^1].Text);
+
+        Check("New installs default to Auto (smart)", new FanOptions().Mode == FanMode.Smart && new FanOptions().Validate() is null,
+              $"default mode {new FanOptions().Mode}");
     }
 
     private static ConnectorReading Pins(Func<int, double> v, Func<int, double> a) =>
