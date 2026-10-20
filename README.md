@@ -63,8 +63,9 @@ How the register was found: [docs/power-detector.md](docs/power-detector.md#hots
 ## Diagnostic log
 
 For tracking down problems, Settings → Diagnostics turns on a detailed log (or start the app or
-CLI with `--debug` for one run at full detail). Files are JSON lines in
-`%LocalAppData%\ReTweak\diagnostics` (10 MB each, last 10 kept), written from a background thread:
+CLI with `--debug` for one run at full detail). Files are JSON lines (10 MB each, last 10 kept), written
+from a background thread, in `%ProgramData%\ReTweak\diagnostics` when running as administrator (only
+administrators can change that folder; everyone can read it) or `%LocalAppData%\ReTweak\diagnostics` otherwise:
 
 | Level | Adds |
 |---|---|
@@ -74,6 +75,14 @@ CLI with `--debug` for one run at full detail). Files are JSON lines in
 
 **Save diagnostics to Desktop** zips the logs, settings, the latest connector CSVs and an
 environment summary, ready to attach to an issue.
+
+## Running as administrator safely
+
+The elevated ReTweak never lets files or registry keys your normal account controls redirect it:
+it doesn't follow junctions or symlinks in folders it writes to (settings, learned airflow, logs),
+only writes CSV logs and the diagnostics zip inside your profile, keeps its diagnostic log in an
+admin-only folder, starts `explorer.exe` and `schtasks.exe` by full path without ShellExecute, and
+checks that a newly registered logon task really runs ReTweak.
 
 ## Layout
 

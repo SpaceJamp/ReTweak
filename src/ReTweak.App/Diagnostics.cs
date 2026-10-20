@@ -13,7 +13,17 @@ namespace ReTweak.App;
 public static class Diagnostics
 {
     public const string DebugArg = "--debug";
-    public static string Folder { get; } = Path.Combine(AppSettings.Folder, "diagnostics");
+    /// <summary>
+    /// Elevated, logs go to %ProgramData%\ReTweak\diagnostics, which only administrators can change: the
+    /// elevated app creates and deletes files there, and must not do that in a folder the unelevated user
+    /// controls. Unelevated, %LocalAppData%\ReTweak\diagnostics (the app has only the user's rights then).
+    /// </summary>
+    public static string Folder { get; } = TrustedPaths.IsElevated
+        ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "ReTweak", "diagnostics")
+        : Path.Combine(AppSettings.Folder, "diagnostics");
+
+    /// <summary>Why diagnostics couldn't start, or null.</summary>
+    public static string? Problem { get; private set; }
     private static readonly JsonSerializerOptions Indented = new() { WriteIndented = true };
 
     /// <summary>--debug on the command line: full (Trace) logging for this run, whatever Settings says.</summary>
@@ -23,8 +33,15 @@ public static class Diagnostics
     /// <summary>Applies the level from Settings (or --debug).</summary>
     public static void Apply(DiagLevel fromSettings)
     {
-        try { Diag.Configure(ForcedByArg ? DiagLevel.Trace : fromSettings, Folder); }
-        catch (Exception) { /* can't create the folder: run without diagnostics rather than not at all */ }
+        var level = ForcedByArg ? DiagLevel.Trace : fromSettings;
+        Problem = null;
+        if (level != DiagLevel.Off && TrustedPaths.IsElevated && !TrustedPaths.EnsureAdminOnlyFolder(Folder))
+        {
+            Problem = $"Couldn't secure {Folder} (a junction or a folder ReTweak can't take over), so diagnostics are off.";
+            level = DiagLevel.Off;
+        }
+        try { Diag.Configure(level, Folder); }
+        catch (Exception ex) { Problem = $"Diagnostics couldn't start: {ex.Message}"; }
     }
 
     /// <summary>Logs every unhandled exception, wherever it comes from, before the process goes down.</summary>
@@ -91,8 +108,12 @@ public static class Diagnostics
         Diag.Info(DiagCategory.App, "saving diagnostics bundle");
         Diag.FlushTiming();
         Thread.Sleep(300); // let the writer catch up
-        string zipPath = Path.Combine(System.Environment.GetFolderPath(System.Environment.SpecialFolder.DesktopDirectory),
-                                      $"ReTweak-diagnostics-{DateTime.Now:yyyyMMdd-HHmmss}.zip");
+        string desktop = System.Environment.GetFolderPath(System.Environment.SpecialFolder.DesktopDirectory);
+        // The Desktop location is a user setting: an elevated ReTweak only writes there if it's a plain folder
+        // in the user's profile. The zip itself is created new (never through an existing file or link).
+        if (!TrustedPaths.IsAllowedUserFolder(desktop))
+            throw new UnauthorizedAccessException($"The Desktop ({desktop}) isn't a plain folder in your profile; not writing there as administrator.");
+        string zipPath = Path.Combine(desktop, $"ReTweak-diagnostics-{DateTime.Now:yyyyMMdd-HHmmss}.zip");
         using var zip = ZipFile.Open(zipPath, ZipArchiveMode.Create);
 
         var summary = zip.CreateEntry("environment.json");
@@ -120,7 +141,6 @@ public static class Diagnostics
         catch (IOException) { /* skip a file that vanished */ }
     }
 
-    /// <summary>Opens Explorer with the file selected.</summary>
-    public static void Reveal(string path) =>
-        Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{path}\"") { UseShellExecute = true });
+    /// <summary>Opens Explorer with the file selected (full path to explorer.exe, no ShellExecute).</summary>
+    public static void Reveal(string path) => TrustedPaths.OpenInExplorer(path, select: true);
 }

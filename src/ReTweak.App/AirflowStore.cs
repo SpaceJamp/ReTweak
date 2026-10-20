@@ -30,14 +30,11 @@ internal static class AirflowStore
     {
         try
         {
-            Directory.CreateDirectory(AppSettings.Folder);
             Dictionary<string, double[]> all = [];
             if (File.Exists(FilePath))
                 all = JsonSerializer.Deserialize<Dictionary<string, double[]>>(File.ReadAllText(FilePath)) ?? [];
             all[gpu] = [.. corrections.Select(c => Math.Round(c, 3))];
-            string tmp = FilePath + ".tmp";
-            File.WriteAllText(tmp, JsonSerializer.Serialize(all));
-            File.Move(tmp, FilePath, overwrite: true);
+            TrustedPaths.WriteFileSafely(FilePath, JsonSerializer.Serialize(all));
             Diag.Info(DiagCategory.Fan, "saved learned airflow", new { gpu, corrections = all[gpu] });
         }
         catch (Exception ex) { Diag.Warn(DiagCategory.Fan, "couldn't save learned airflow", new { ex.Message }); }

@@ -52,7 +52,8 @@ internal static class SettingsDialog
         };
         var diagNote = new TextBlock
         {
-            Text = (Diagnostics.ForcedByArg ? "Started with --debug: logging everything for this run. " : "") +
+            Text = (Diagnostics.Problem is { } problem ? problem + " " : "") +
+                   (Diagnostics.ForcedByArg ? "Started with --debug: logging everything for this run. " : "") +
                    (Diag.CurrentFile is { } f0 ? $"Writing {f0}" : $"Files go to {Diagnostics.Folder} (10 MB each, last 10 kept)."),
             Style = (Style)Application.Current.Resources["CaptionTextBlockStyle"],
             TextWrapping = TextWrapping.Wrap,
@@ -66,8 +67,12 @@ internal static class SettingsDialog
         };
         openDiag.Click += (_, _) =>
         {
-            Directory.CreateDirectory(Diagnostics.Folder);
-            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(Diagnostics.Folder) { UseShellExecute = true });
+            try
+            {
+                Directory.CreateDirectory(Diagnostics.Folder);
+                TrustedPaths.OpenInExplorer(Diagnostics.Folder); // full path to explorer.exe, no ShellExecute
+            }
+            catch (Exception ex) { diagNote.Text = $"Couldn't open the folder: {ex.Message}"; }
         };
         var diagButtons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 12 };
         diagButtons.Children.Add(saveDiag);

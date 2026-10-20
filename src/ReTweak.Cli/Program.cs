@@ -15,11 +15,19 @@ using ReTweak.Core;
 // --debug: full diagnostic log (JSON lines) to %LocalAppData%\ReTweak\diagnostics, like the app's --debug.
 if (args.Contains("--debug"))
 {
-    string diagFolder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ReTweak", "diagnostics");
-    Diag.Configure(DiagLevel.Trace, diagFolder);
+    // Same rule as the app: elevated, only into the admin-only %ProgramData% folder.
+    string diagFolder = TrustedPaths.IsElevated
+        ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "ReTweak", "diagnostics")
+        : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ReTweak", "diagnostics");
+    if (TrustedPaths.IsElevated && !TrustedPaths.EnsureAdminOnlyFolder(diagFolder))
+    {
+        Console.WriteLine($"Couldn't secure {diagFolder}; running without the diagnostic log.");
+        diagFolder = "";
+    }
+    if (diagFolder.Length > 0) Diag.Configure(DiagLevel.Trace, diagFolder);
     Diag.Info(DiagCategory.App, "cli started", new { args, admin = Environment.IsPrivilegedProcess });
     AppDomain.CurrentDomain.ProcessExit += (_, _) => Diag.Shutdown();
-    Console.WriteLine($"Diagnostic log: {diagFolder}");
+    if (diagFolder.Length > 0) Console.WriteLine($"Diagnostic log: {diagFolder}");
 }
 
 int replayIdx = Array.IndexOf(args, "--replay");

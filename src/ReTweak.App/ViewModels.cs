@@ -264,6 +264,7 @@ public sealed partial class MainViewModel : Observable, IDisposable
         if (settings.LogConnector && (!logging || !_sampler.LogPath!.StartsWith(settings.LogFolder, StringComparison.OrdinalIgnoreCase)))
         {
             try { _sampler.SetLog(CsvLogger.Daily(settings.LogFolder)); }
+            catch (Exception ex) when (Diag.IsOn(DiagLevel.Warn) && LogRefused(ex)) { }
             catch (Exception) { _sampler.SetLog(null); } // bad folder: keep monitoring without logging
         }
         else if (!settings.LogConnector && logging)
@@ -271,6 +272,13 @@ public sealed partial class MainViewModel : Observable, IDisposable
     }
 
     public string? LogPath => _sampler?.LogPath;
+
+    private bool LogRefused(Exception ex)
+    {
+        Diag.Warn(DiagCategory.Settings, "connector log not started", new { ex.Message });
+        _sampler?.SetLog(null);
+        return true;
+    }
 
     /// <summary>Zips logs, settings and an environment summary to the Desktop; returns the zip's path.</summary>
     public string SaveDiagnostics() => Diagnostics.SaveBundle(_monitor, _settings);

@@ -115,6 +115,9 @@ public sealed partial class MainWindow : Window
         if (saved is not null) ViewModel.Apply(saved);
     }
 
+    /// <summary>Opens pawnio.eu through Explorer, not ShellExecute in this (possibly elevated) process.</summary>
+    private void GetPawnIo_Click(object sender, RoutedEventArgs e) => TrustedPaths.OpenLink(new Uri("https://pawnio.eu/"));
+
     private void RestartElevated_Click(object sender, RoutedEventArgs e)
     {
         // Only exit once the UAC prompt was accepted; the elevated copy waits for this one to finish.

@@ -55,6 +55,7 @@ static class Simulate
         FanCheck();
         SmartCheck();
         AdaptiveCheck();
+        TrustedPathsCheck();
 
         Console.WriteLine(_failures == 0 ? "\nAll scenarios passed." : $"\n{_failures} scenario(s) FAILED.");
         return _failures;
@@ -775,6 +776,47 @@ static class Simulate
         Check($"Auto without activity readings keeps the general {auto.SmartTargetHotspotC:F0} °C target",
               plain.HotspotC.Skip(240).Max(h => Math.Abs(h - auto.SmartTargetHotspotC)) <= 3 &&
               plain.Statuses[^1].Activity == ActivityKind.Unknown, plain.Statuses[^1].Text);
+    }
+
+    /// <summary>The hardening helpers against a real junction (mklink /J works without administrator rights).</summary>
+    private static void TrustedPathsCheck()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"retweak-paths-{Guid.NewGuid():N}");
+        string real = Path.Combine(root, "real"), target = Path.Combine(root, "elsewhere"), link = Path.Combine(root, "link");
+        Directory.CreateDirectory(real);
+        Directory.CreateDirectory(target);
+        try
+        {
+            using (var mk = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(TrustedPaths.SystemExe("cmd.exe"), $"/c mklink /J \"{link}\" \"{target}\"")
+                   { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true })!) mk.WaitForExit();
+            bool haveLink = Directory.Exists(link);
+
+            bool plainOk = TrustedPaths.IsPlainPath(Path.Combine(real, "not-yet", "file.json"));
+            bool linkCaught = haveLink && !TrustedPaths.IsPlainPath(Path.Combine(link, "file.json"));
+            Check("Trusted paths: plain folders pass, a junction anywhere in the path is caught", plainOk && linkCaught,
+                  haveLink ? $"plain: {plainOk}, through junction: {(linkCaught ? "refused" : "allowed")}" : "couldn't create a junction to test with");
+
+            TrustedPaths.WriteFileSafely(Path.Combine(real, "settings.json"), "{}");
+            bool wrote = File.ReadAllText(Path.Combine(real, "settings.json")) == "{}" && Directory.GetFiles(real, "*.tmp").Length == 0;
+            bool refused;
+            try { TrustedPaths.WriteFileSafely(Path.Combine(link, "settings.json"), "{}"); refused = false; }
+            catch (IOException) { refused = true; }
+            Check("Trusted paths: safe write replaces atomically and won't write through a junction",
+                  wrote && refused && !File.Exists(Path.Combine(target, "settings.json")),
+                  $"plain write ok: {wrote}; through junction: {(refused ? "refused" : "WRITTEN")}");
+
+            bool under = TrustedPaths.IsUnder(Path.Combine(root, "real", "x"), root) && !TrustedPaths.IsUnder(root + "-other", root);
+            Check("Trusted paths: 'inside folder' check isn't fooled by a shared prefix", under, $"{under}");
+
+            string sysExe = TrustedPaths.SystemExe("schtasks.exe"), explorer = TrustedPaths.SystemExe("explorer.exe");
+            Check("Trusted paths: system programs by full path", Path.IsPathRooted(sysExe) && File.Exists(sysExe) && File.Exists(explorer),
+                  $"{sysExe}, {explorer}");
+        }
+        finally
+        {
+            try { if (Directory.Exists(link)) Directory.Delete(link); } catch (IOException) { } // removes the junction, not its target
+            try { Directory.Delete(root, recursive: true); } catch (IOException) { }
+        }
     }
 
     private static ConnectorReading Pins(Func<int, double> v, Func<int, double> a) =>
