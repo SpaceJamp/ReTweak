@@ -1,0 +1,37 @@
+<Project>
+
+  <!--
+    ReTweak's version. Change VersionPrefix for a release; the build number is added at build time:
+    the number of commits (git rev-list -\-count HEAD) and the short commit hash, plus ".dirty" when the
+    working tree has uncommitted changes. Shown in the title bar, Settings, `ReTweak.Cli -\-version` and
+    every diagnostic log. Builds without git still work (build 0).
+  -->
+  <PropertyGroup>
+    <VersionPrefix>0.9.0</VersionPrefix>
+    <!-- We write the full informational version ourselves. -->
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+  </PropertyGroup>
+
+  <Target Name="ReTweakBuildNumber" BeforeTargets="GetAssemblyVersion;GenerateAssemblyInfo" Condition="'$(ReTweakBuild)' == ''">
+    <Exec Command="git rev-list --count HEAD" ConsoleToMSBuild="true" StandardOutputImportance="low"
+          WorkingDirectory="$(MSBuildThisFileDirectory)" ContinueOnError="true" IgnoreExitCode="true">
+      <Output TaskParameter="ConsoleOutput" PropertyName="ReTweakBuild" />
+    </Exec>
+    <Exec Command="git rev-parse --short HEAD" ConsoleToMSBuild="true" StandardOutputImportance="low"
+          WorkingDirectory="$(MSBuildThisFileDirectory)" ContinueOnError="true" IgnoreExitCode="true">
+      <Output TaskParameter="ConsoleOutput" PropertyName="ReTweakCommit" />
+    </Exec>
+    <Exec Command="git status --porcelain --untracked-files=no" ConsoleToMSBuild="true" StandardOutputImportance="low"
+          WorkingDirectory="$(MSBuildThisFileDirectory)" ContinueOnError="true" IgnoreExitCode="true">
+      <Output TaskParameter="ConsoleOutput" PropertyName="ReTweakChanges" />
+    </Exec>
+    <PropertyGroup>
+      <ReTweakBuild Condition="!$([System.Text.RegularExpressions.Regex]::IsMatch('$(ReTweakBuild)', '^\d+$'))">0</ReTweakBuild>
+      <ReTweakCommit Condition="!$([System.Text.RegularExpressions.Regex]::IsMatch('$(ReTweakCommit)', '^[0-9a-f]+$'))">unknown</ReTweakCommit>
+      <ReTweakDirty Condition="'$(ReTweakChanges)' != ''">.dirty</ReTweakDirty>
+      <FileVersion>$(VersionPrefix).$(ReTweakBuild)</FileVersion>
+      <InformationalVersion>$(VersionPrefix)+$(ReTweakBuild).$(ReTweakCommit)$(ReTweakDirty)</InformationalVersion>
+    </PropertyGroup>
+  </Target>
+
+</Project>

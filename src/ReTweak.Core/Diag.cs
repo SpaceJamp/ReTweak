@@ -65,7 +65,7 @@ public static class Diag
             _writer = Task.Run(() => WriteLoop(queue, folder));
             _timingTimer = new Timer(_ => FlushTiming(), null, TimingInterval, TimingInterval);
         }
-        Write(DiagLevel.Info, DiagCategory.App, "diagnostics started", new { level = level.ToString(), folder });
+        Write(DiagLevel.Info, DiagCategory.App, "diagnostics started", new { version = BuildInfo.Full, level = level.ToString(), folder });
     }
 
     /// <summary>Flushes pending lines and stops. Safe to call at exit.</summary>

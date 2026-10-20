@@ -48,6 +48,7 @@ public static partial class SecurityCheck
         }
 
         // ---- ReTweak itself ----
+        f.Add(new("ReTweak", $"Version {BuildInfo.Display}", CheckStatus.Info, BuildInfo.Dirty ? "Built with uncommitted changes." : ""));
         Add(() => TrustedPaths.IsElevated
             ? new("ReTweak", "Running as administrator", CheckStatus.Info, "Needed for the hotspot (PawnIO) and fan control. The checks below are what keeps that safe.")
             : new("ReTweak", "Running without administrator rights", CheckStatus.Info, "Monitoring works; the hotspot and fan control need ReTweak to run as administrator."));

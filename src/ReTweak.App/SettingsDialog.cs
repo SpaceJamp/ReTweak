@@ -333,6 +333,7 @@ internal static class SettingsDialog
             error, Section("General"), autostart, autostartNote, tray, toasts,
             Section("Logging"), log, logFolder, logNote,
             Section("Diagnostics"), diagLevel, diagNote, diagButtons,
+            Section("About"), Caption($"ReTweak {BuildInfo.Display}"),
             Section("Security"), Caption("Checks ReTweak's files, autostart, the PawnIO driver, data folders, known UAC-bypass entries, " +
                                          "risky drivers and Windows protections. Read-only."), runSecurity, securityResults,
             Section("Alert thresholds"), grid, reset,
