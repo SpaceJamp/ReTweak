@@ -2,7 +2,14 @@ using System.Diagnostics;
 
 namespace ReTweak.Core;
 
-public enum FanMode { Auto, Fixed, Curve }
+/// <summary>
+/// Stored as numbers in settings.json, so values never change: Driver (0, the card's own curve; formerly "Auto"),
+/// Fixed, Curve, and Smart (3), the closed-loop controller the dashboard calls "Auto".
+/// </summary>
+public enum FanMode { Driver = 0, Fixed = 1, Curve = 2, Smart = 3 }
+
+/// <summary>How the Smart (Auto) controller trades temperature accuracy against fan noise.</summary>
+public enum SmartPriority { Quiet, Balanced, Tight }
 
 /// <summary>Which temperature the curve follows.</summary>
 public enum FanSource { Core, Hotspot, Memory, Hottest }
@@ -13,7 +20,9 @@ public sealed record FanPoint(double TempC, int Percent);
 /// <summary>The temperatures fan control works from; any may be missing.</summary>
 /// <param name="HotspotC">Hotspot averaged over the last second: what the curve follows.</param>
 /// <param name="HotspotMaxC">Highest hotspot reading in the last second: what failsafes and the safety net use.</param>
-public readonly record struct FanTemps(double? CoreC, double? HotspotC = null, double? MemoryC = null, double? HotspotMaxC = null)
+/// <param name="PowerFraction">Board power / power limit (0-1): lets Smart mode react to load before temperature does.</param>
+public readonly record struct FanTemps(double? CoreC, double? HotspotC = null, double? MemoryC = null, double? HotspotMaxC = null,
+                                       double? PowerFraction = null)
 {
     /// <summary>The hotspot to make safety decisions on: the peak when known, else the average.</summary>
     public double? HotspotPeakC => HotspotMaxC ?? HotspotC;
@@ -21,8 +30,8 @@ public readonly record struct FanTemps(double? CoreC, double? HotspotC = null, d
 
 public sealed record FanOptions
 {
-    /// <summary>Auto leaves the fans to the driver, with the optional <see cref="AutoAssist"/> safety net.</summary>
-    public FanMode Mode { get; init; } = FanMode.Auto;
+    /// <summary>Smart (shown as "Auto") is ReTweak's own controller; Driver leaves the fans to the card's curve.</summary>
+    public FanMode Mode { get; init; } = FanMode.Smart;
     public int FixedPercent { get; init; } = 60;
     /// <summary>Linear between points; flat below the first and above the last.</summary>
     public IReadOnlyList<FanPoint> Curve { get; init; } = Presets["Balanced"];
@@ -59,6 +68,18 @@ public sealed record FanOptions
     public double AssistHoldSeconds { get; init; } = 30;
     /// <summary>Added to the driver's speed when the safety net steps in.</summary>
     public int AssistBoostPercent { get; init; } = 20;
+
+    /// <summary>
+    /// Smart mode: hold the hotspot (or, without one, the core) at a target. The fan speed is a
+    /// load estimate from board power plus a proportional-integral correction on the temperature
+    /// error; see <see cref="SmartTuning"/>. Failsafes, ramping and the driver's minimum still apply.
+    /// </summary>
+    public double SmartTargetHotspotC { get; init; } = 80;
+    /// <summary>Used when there's no hotspot (no PawnIO): the core runs a few degrees below the hotspot.</summary>
+    public double SmartTargetCoreC { get; init; } = 72;
+    public SmartPriority SmartPriority { get; init; } = SmartPriority.Balanced;
+    /// <summary>Hand the fans to the driver well below the target at low load, so they can stop (0 RPM).</summary>
+    public bool SmartIdleStop { get; init; }
 
     /// <summary>Ready-made curves, written for the core temperature.</summary>
     public static IReadOnlyDictionary<string, IReadOnlyList<FanPoint>> Presets { get; } = new Dictionary<string, IReadOnlyList<FanPoint>>
@@ -103,6 +124,10 @@ public sealed record FanOptions
         if (AssistReleaseMarginC is < 1 or > 20) return "Safety-net release margin must be 1-20 °C.";
         if (AssistHoldSeconds is < 0 or > 600) return "Safety-net hold time must be 0-600 s.";
         if (AssistBoostPercent is < 0 or > 100) return "Safety-net boost must be 0-100 %.";
+        if (SmartTargetHotspotC is < 50 or > 105) return "Auto hotspot target must be 50-105 °C.";
+        if (SmartTargetCoreC is < 40 or > 95) return "Auto core target must be 40-95 °C.";
+        if (SmartTargetHotspotC >= FailsafeHotspotC) return "Auto hotspot target must be below the hotspot failsafe.";
+        if (SmartTargetCoreC >= FailsafeTempC) return "Auto core target must be below the core failsafe.";
         return null;
     }
 
@@ -117,6 +142,20 @@ public sealed record FanOptions
                 return (int)Math.Round(a.Percent + (b.Percent - a.Percent) * (tempC - a.TempC) / (b.TempC - a.TempC));
         }
         return Curve[^1].Percent;
+    }
+
+    /// <summary>Controller constants for each <see cref="SmartPriority"/>.</summary>
+    /// <param name="Kp">% fan per °C of error.</param>
+    /// <param name="Ki">% fan per °C·s of accumulated error.</param>
+    /// <param name="DeadbandC">Errors smaller than this are ignored, so the fans don't chase noise.</param>
+    public readonly record struct SmartTuning(double Kp, double Ki, double DeadbandC, double RampUp, double RampDown, double SmoothingSeconds)
+    {
+        public static SmartTuning For(SmartPriority p) => p switch
+        {
+            SmartPriority.Quiet => new(2.5, 0.05, 2.0, 5, 1.5, 4),
+            SmartPriority.Tight => new(7.0, 0.30, 0.25, 25, 6, 1),
+            _ => new(4.0, 0.12, 0.75, 10, 3, 2),
+        };
     }
 
     public static string SourceName(FanSource s) => s switch
@@ -148,7 +187,8 @@ public sealed class FanController : IDisposable
 {
     /// <summary>Seconds without a temperature before giving the fans back to the driver.</summary>
     public const int MissedTempsBeforeRelease = 3;
-    private const int OverridesBeforeWarning = 3;
+    private const int OverridesBeforeWarning = 3, OverrideWindowTicks = 10;
+    private readonly Queue<bool> _recentOverrides = new(); // last few ticks: did another program change the fans?
     /// <summary>The safety net creeps the speed up by this much per second while it's still too hot.</summary>
     private const double AssistCreepPerSecond = 2;
 
@@ -168,11 +208,15 @@ public sealed class FanController : IDisposable
     private bool _inZeroRpm, _assisting;
     private double _assistTarget;
     private TimeSpan? _coolSince;
+    private double _integral;        // Smart: accumulated correction, % fan
+    private bool _smartRunning, _smartIdle;
+    private string? _smartInput;     // "hotspot" or "core": switching resets the controller
+    private object? _lastSmart;      // this tick's controller terms, for the diagnostic log
     private string? _blocked;        // write failed; don't retry until the options change
     private bool _blockedByPermission;
     private bool _disposed;
 
-    public FanStatus Status { get; private set; } = new(FanMode.Auto, null, "Automatic (driver)");
+    public FanStatus Status { get; private set; } = new(FanMode.Driver, null, "Automatic (driver)");
 
     public FanController(GpuMonitor monitor, int gpuIndex)
         : this(p => monitor.SetFanSpeed(gpuIndex, p), () => monitor.RestoreAutoFans(gpuIndex),
@@ -202,12 +246,41 @@ public sealed class FanController : IDisposable
             _blocked = null; // new settings: allow another attempt
             _blockedByPermission = false;
             _overrides = 0;
+            _recentOverrides.Clear();
             if (value.Source != previous.Source) _smoothed = null; // a different input: don't average across it
-            if (value.Mode != FanMode.Auto) { _assisting = false; _coolSince = null; }
+            if (value.Mode != FanMode.Driver) { _assisting = false; _coolSince = null; }
+            if (value.Mode != FanMode.Smart || value.SmartPriority != previous.SmartPriority) _smartRunning = false;
         }
     }
 
+    /// <summary>Runs one control step; with diagnostics on, logs the inputs, internals and the decision.</summary>
     public FanStatus Tick(FanTemps temps)
+    {
+        var before = Status;
+        _lastSmart = null;
+        var st = TickCore(temps);
+        if (Diag.IsOn(DiagLevel.Debug))
+            Diag.Debug(DiagCategory.Fan, "tick", new
+            {
+                mode = _options.Mode.ToString(),
+                temps.CoreC, temps.HotspotC, temps.HotspotMaxC, temps.MemoryC, temps.PowerFraction,
+                smoothedC = _smoothed,
+                written = _applied,
+                commanded = _commanded,
+                smart = _lastSmart,
+                assisting = _assisting,
+                zeroRpm = _inZeroRpm,
+                overrides = _overrides,
+                blocked = _blocked,
+                status = st.Text,
+            });
+        if (st.Mode != before.Mode || st.Assisting != before.Assisting || st.NeedsAdmin != before.NeedsAdmin
+            || st.Severity != before.Severity || (st.Percent is null) != (before.Percent is null))
+            Diag.Info(DiagCategory.Fan, "fan state changed", new { from = before.Text, to = st.Text, severity = st.Severity.ToString() });
+        return st;
+    }
+
+    private FanStatus TickCore(FanTemps temps)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         var o = _options;
@@ -215,18 +288,26 @@ public sealed class FanController : IDisposable
         double dt = _lastTick is TimeSpan last ? Math.Clamp((now - last).TotalSeconds, 0, 5) : 1;
         _lastTick = now;
 
-        if (o.Mode == FanMode.Auto && !o.AutoAssist)
+        if (o.Mode == FanMode.Driver && !o.AutoAssist)
         {
             Release();
-            return Status = new(FanMode.Auto, null, "Automatic (driver)");
+            return Status = new(FanMode.Driver, null, "Automatic (driver)");
         }
         if (_blocked is not null)
-            return Status = o.Mode == FanMode.Auto
-                ? new(FanMode.Auto, null, $"Automatic (driver). Safety net off: {_blocked}.", AlertSeverity.None, _blockedByPermission)
+            return Status = o.Mode == FanMode.Driver
+                ? new(FanMode.Driver, null, $"Automatic (driver). Safety net off: {_blocked}.", AlertSeverity.None, _blockedByPermission)
                 : new(o.Mode, null, $"Can't set fan speed: {_blocked}. Fans are on automatic.", AlertSeverity.Warning, _blockedByPermission);
 
         string? failsafe = Failsafe(o, temps);
-        var (source, sourceName) = SourceTemp(o, temps);
+        var (source, sourceName) = o.Mode == FanMode.Smart
+            ? (temps.HotspotC ?? temps.CoreC, temps.HotspotC is null ? "core" : "hotspot")
+            : SourceTemp(o, temps);
+        if (o.Mode == FanMode.Smart && sourceName != _smartInput)
+        {
+            _smartInput = sourceName; // hotspot appeared or vanished: different scale, start over
+            _smoothed = null;
+            _smartRunning = false;
+        }
         if (source is not double raw)
         {
             _smoothed = null;
@@ -240,10 +321,12 @@ public sealed class FanController : IDisposable
             return Status = new(o.Mode, null, "No temperature reading, so the driver has the fans until it's back.", AlertSeverity.Warning);
         }
         _missedTemps = 0;
-        double smooth = _smoothed is double s && o.SmoothingSeconds > 0 ? s + (raw - s) * dt / (o.SmoothingSeconds + dt) : raw;
+        double smoothing = o.Mode == FanMode.Smart ? FanOptions.SmartTuning.For(o.SmartPriority).SmoothingSeconds : o.SmoothingSeconds;
+        double smooth = _smoothed is double s && smoothing > 0 ? s + (raw - s) * dt / (smoothing + dt) : raw;
         _smoothed = smooth;
 
-        if (o.Mode == FanMode.Auto) return AutoTick(o, temps, failsafe, now, dt);
+        if (o.Mode == FanMode.Driver) return AutoTick(o, temps, failsafe, now, dt);
+        if (o.Mode == FanMode.Smart) return SmartTick(o, temps, failsafe, smooth, sourceName, dt);
 
         int target;
         if (failsafe is not null) target = 100;
@@ -274,6 +357,69 @@ public sealed class FanController : IDisposable
                                 AlertSeverity.Warning, SourceTempC: smooth);
         string ramp = _applied != target ? $" → {target}%" : "";
         return Status = new(o.Mode, _applied, $"{mode} · {_applied}%{ramp} at {sourceName} {smooth:F0} °C", SourceTempC: smooth);
+    }
+
+    /// <summary>
+    /// Smart: fan % = load estimate + Kp·error + integral, ramped, clamped to the driver's range.
+    /// The load estimate (25% idle to 80% at the power limit) moves the fans as soon as power changes;
+    /// the PI term then trims the temperature onto the target. Starting takes over from wherever the
+    /// driver had the fans (bumpless), and the integral stops growing while the output is pinned
+    /// (anti-windup) so it doesn't overshoot when the load drops.
+    /// </summary>
+    private FanStatus SmartTick(FanOptions o, FanTemps t, string? failsafe, double temp, string input, double dt)
+    {
+        var tune = FanOptions.SmartTuning.For(o.SmartPriority);
+        double target = input == "hotspot" ? o.SmartTargetHotspotC : o.SmartTargetCoreC;
+        double error = temp - target;
+        double power = Math.Clamp(t.PowerFraction ?? 0.35, 0, 1.2);
+
+        if (o.SmartIdleStop && failsafe is null)
+        {
+            _smartIdle = _smartIdle ? !(error > -15 || power >= 0.25) : error < -20 && power < 0.15;
+            if (_smartIdle)
+            {
+                _smartRunning = false;
+                Release();
+                return Status = new(FanMode.Smart, null, $"Auto · idle, driver can stop the fans ({input} {temp:F0} °C)", SourceTempC: temp);
+            }
+        }
+
+        double feedForward = 25 + 55 * Math.Min(power, 1);
+        double effective = Math.Abs(error) <= tune.DeadbandC ? 0 : error - Math.Sign(error) * tune.DeadbandC;
+        if (!_smartRunning)
+        {
+            // Bumpless: pick the integral so the first output is where the fans already are. If that needs an
+            // integral pushing against the error (e.g. positive while far below target), the gap is the
+            // proportional term saturating, not a lasting offset: start at zero and let the ramp limit move
+            // the fans from where the driver had them. (Seen in a diagnostic log: +60 at 43 °C below target.)
+            double now0 = _applied ?? _readTarget() ?? feedForward;
+            double bumpless = now0 - feedForward - tune.Kp * effective;
+            _integral = bumpless * effective < 0 ? 0 : Math.Clamp(bumpless, -60, 60);
+            _smartRunning = true;
+        }
+
+        double unclamped = feedForward + tune.Kp * effective + _integral;
+        bool pinnedHigh = unclamped >= _range.Max && effective > 0, pinnedLow = unclamped <= _range.Min && effective < 0;
+        if (!pinnedHigh && !pinnedLow) _integral = Math.Clamp(_integral + tune.Ki * effective * dt, -60, 60);
+        else if (_integral * effective < 0) _integral *= Math.Exp(-dt / 10); // pinned, and the integral points the wrong way: drain it
+        int target100 = failsafe is not null ? 100 : (int)Math.Round(Math.Clamp(feedForward + tune.Kp * effective + _integral, _range.Min, _range.Max));
+        _lastSmart = new
+        {
+            input, targetC = target, errorC = Math.Round(error, 2), effectiveC = Math.Round(effective, 2),
+            feedForward = Math.Round(feedForward, 2), proportional = Math.Round(tune.Kp * effective, 2),
+            integral = Math.Round(_integral, 2), unclamped = Math.Round(unclamped, 2), pinnedHigh, pinnedLow,
+            target = target100, priority = o.SmartPriority.ToString(),
+        };
+
+        var ramped = o with { RampUpPerSecond = tune.RampUp, RampDownPerSecond = tune.RampDown };
+        if (Drive(target100, jump: failsafe is not null, ramped, dt) is { } blocked) return blocked;
+
+        if (failsafe is not null)
+            return Status = new(FanMode.Smart, _applied, $"Full speed: {failsafe}", AlertSeverity.Warning, SourceTempC: temp);
+        if (_overrides >= OverridesBeforeWarning)
+            return Status = new(FanMode.Smart, _applied, $"Auto {_applied}%, but another program keeps changing the fans. Close other fan tools.",
+                                AlertSeverity.Warning, SourceTempC: temp);
+        return Status = new(FanMode.Smart, _applied, $"Auto · {_applied}% · {input} {temp:F1} °C → {target:F0} °C", SourceTempC: temp);
     }
 
     /// <summary>Auto: the driver has the fans unless the safety net (or a failsafe) needs to step in.</summary>
@@ -317,13 +463,13 @@ public sealed class FanController : IDisposable
         {
             Release();
             string watching = t.HotspotPeakC is null ? "safety net watching memory" : "safety net on";
-            return Status = new(FanMode.Auto, null, $"Automatic (driver) · {watching}");
+            return Status = new(FanMode.Driver, null, $"Automatic (driver) · {watching}");
         }
 
         int target = Math.Clamp(failsafe is not null ? 100 : (int)Math.Round(_assistTarget), _range.Min, _range.Max);
         if (Drive(target, jump: failsafe is not null, o, dt) is { } blocked) return blocked;
         string why = hot ?? (_coolSince is null ? "cooling down" : $"cool, handing back in {o.AssistHoldSeconds - (now - _coolSince.Value).TotalSeconds:F0} s");
-        return Status = new(FanMode.Auto, _applied, failsafe is not null ? $"Full speed: {failsafe}" : $"Safety net · {_applied}% · {why}",
+        return Status = new(FanMode.Driver, _applied, failsafe is not null ? $"Full speed: {failsafe}" : $"Safety net · {_applied}% · {why}",
                             AlertSeverity.Warning, Assisting: true);
     }
 
@@ -345,7 +491,11 @@ public sealed class FanController : IDisposable
         // Afterburner...) may be fighting over the fans.
         int? driverTarget = _applied is null ? null : _readTarget();
         bool overridden = driverTarget is int d && Math.Abs(d - _applied!.Value) > 2;
-        _overrides = overridden ? _overrides + 1 : 0;
+        // Count overrides over the last few ticks, not in a row: a tool that fights every other tick
+        // (seen in a log: ASUS's fan service setting 0% every ~3 s) never makes three in a row.
+        _recentOverrides.Enqueue(overridden);
+        while (_recentOverrides.Count > OverrideWindowTicks) _recentOverrides.Dequeue();
+        _overrides = _recentOverrides.Count(o => o);
         if (write == _applied && !overridden) return null;
 
         if (_set(write) is { } error)
@@ -355,8 +505,8 @@ public sealed class FanController : IDisposable
             ResetHeld();
             _assisting = false;
             _restore(); // a multi-fan write can fail halfway; undo the fans that did change
-            return Status = o.Mode == FanMode.Auto
-                ? new(FanMode.Auto, null, $"Automatic (driver). Safety net off: {error}.", AlertSeverity.None, _blockedByPermission)
+            return Status = o.Mode == FanMode.Driver
+                ? new(FanMode.Driver, null, $"Automatic (driver). Safety net off: {error}.", AlertSeverity.None, _blockedByPermission)
                 : new(o.Mode, null, $"Can't set fan speed: {error}. Fans are on automatic.", AlertSeverity.Warning, _blockedByPermission);
         }
         _applied = write;
@@ -398,6 +548,7 @@ public sealed class FanController : IDisposable
         _commanded = null;
         _lastTarget = null;
         _overrides = 0;
+        _recentOverrides.Clear();
     }
 
     /// <summary>Gives the fans back to the driver if ReTweak holds them.</summary>

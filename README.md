@@ -12,24 +12,27 @@ going wrong.
 - **Temperatures**: precise core (0.01 °C) and memory on RTX 50; on ASUS cards, memory comes from the
   board sensors GPU Tweak III uses, plus 8 board sensors (VRM, core, memory and more)
 - **Early-warning alerts**: pin over-current, low/high voltage, pin-to-pin voltage spread, current imbalance, fast voltage drops or current ramps, frozen sensor, high core, memory or hotspot temperature
-- **Fan control**: Auto (driver) with a safety net, a fixed speed, or a 5-point curve (drag the points
+- **Fan control**: **Auto** is ReTweak's own controller: it holds the hotspot at a target (80 °C by
+  default; the core at 72 °C without PawnIO), speeding the fans up as soon as board power rises and
+  trimming the remaining error, with Quiet / Balanced / Tight tuning. Also: Driver (the card's own curve) with a safety net, a fixed speed, or a 5-point curve (drag the points
   on the dashboard, or pick Quiet / Balanced / Performance). The curve can follow the core, hotspot,
   memory or the hottest of them; speed changes are ramped and the temperature averaged so the fans don't
   step on short spikes; optional 0 RPM below a temperature you choose. Full speed at a core, hotspot or
   memory failsafe in every mode that writes. The Auto safety net leaves the driver in charge and only steps in
   when the hotspot or memory gets too hot, or the hotspot runs far ahead of the core (poor cooler contact)
+- Detailed **diagnostic log** and a one-click diagnostics bundle (see [below](#diagnostic-log))
 - Native Windows notifications for alerts
 - Runs in the notification area: closing the window keeps monitoring; the tray icon shows the worst active alert
 - Optional start with Windows as administrator (`--minimized`, tray only; see below), CSV logging and adjustable thresholds in Settings
   (stored in `%LocalAppData%\ReTweak\settings.json`)
 
-Monitoring is read-only. The one thing ReTweak writes to the GPU is fan speed: always in Fixed
-and Curve, and in Auto only when the safety net steps in (hotspot or memory too hot; you can turn
-it off in Settings). All of these need ReTweak to run as administrator:
+Monitoring is read-only. The one thing ReTweak writes to the GPU is fan speed: always in Auto,
+Fixed and Curve, and in Driver mode only when the safety net steps in (hotspot or memory too hot;
+you can turn it off in Settings). All of these need ReTweak to run as administrator:
 
 - It uses NVML's documented fan calls and needs administrator rights (the dashboard offers
   *Restart as administrator*). Start with Windows starts it elevated (see below).
-- Switching to Auto, exiting, losing the temperature reading for 3 s or a failed write hands
+- Switching to Driver, exiting, losing the temperature reading for 3 s or a failed write hands
   the fans back to the driver's own curve. At the failsafe temperature (88 °C by default)
   the fans go to 100%.
 - If ReTweak is killed outright (Task Manager, crash), the last manual speed stays until the next
@@ -52,6 +55,21 @@ temperature registers, but Windows only lets kernel drivers read those, so every
   as administrator. Unelevated, the tile says so.
 
 How the register was found: [docs/power-detector.md](docs/power-detector.md#hotspot-on-rtx-50-2026-10-19).
+
+## Diagnostic log
+
+For tracking down problems, Settings → Diagnostics turns on a detailed log (or start the app or
+CLI with `--debug` for one run at full detail). Files are JSON lines in
+`%LocalAppData%\ReTweak\diagnostics` (10 MB each, last 10 kept), written from a background thread:
+
+| Level | Adds |
+|---|---|
+| Events | startup environment (driver, GPU, PawnIO, admin, other fan tools running), settings changes, alerts raised and cleared, fan mode changes, errors and crashes with stack traces |
+| Detailed | every sensor snapshot (all temperatures, clocks, load, power, fans), every connector frame, every fan-controller decision with its internal terms, driver-call timing (count, mean, p95, max, failures per NVML / NVAPI / I2C / PawnIO call every 10 s, plus any slow or failed call) |
+| Everything | raw hotspot register reads at 10 Hz |
+
+**Save diagnostics to Desktop** zips the logs, settings, the latest connector CSVs and an
+environment summary, ready to attach to an issue.
 
 ## Layout
 
@@ -82,7 +100,7 @@ dotnet run --project src/ReTweak.Cli -- --replay logs/run.csv   # re-check a log
 dotnet run --project src/ReTweak.Cli -- --simulate              # scripted failure scenarios (no hardware)
 dotnet run --project src/ReTweak.Cli -- --bench                 # sensor latency and noise
 dotnet run --project src/ReTweak.Cli -- --fans                  # fan count, range, speeds
-dotnet run --project src/ReTweak.Cli -- --fan curve             # drive fans (60 = fixed 60%), admin; Ctrl+C restores
+dotnet run --project src/ReTweak.Cli -- --fan smart             # Auto controller (curve, or 60 = fixed 60%), admin; Ctrl+C restores
 dotnet run --project src/ReTweak.Cli -- --fan auto              # hand fans back to the driver
 python tools/analyze_load.py logs/run.csv
 ```

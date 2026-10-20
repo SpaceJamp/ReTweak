@@ -8,8 +8,19 @@ using ReTweak.Core;
 // ReTweak.Cli --simulate      run alert engine against scripted failures (no hardware)
 // ReTweak.Cli --replay file.csv   run a logged session through the current alert engine
 // ReTweak.Cli --fans          fan count, allowed range, current and target speeds
-// ReTweak.Cli --fan <pct>|curve [--duration secs]   drive the fans until Ctrl+C, then hand them back (admin)
+// ReTweak.Cli --fan <pct>|curve|smart [--duration secs]   drive the fans until Ctrl+C, then hand them back (admin)
 // ReTweak.Cli --fan auto      hand the fans back to the driver (e.g. after a crash) (admin)
+// add --debug to any of these for a full diagnostic log
+
+// --debug: full diagnostic log (JSON lines) to %LocalAppData%\ReTweak\diagnostics, like the app's --debug.
+if (args.Contains("--debug"))
+{
+    string diagFolder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ReTweak", "diagnostics");
+    Diag.Configure(DiagLevel.Trace, diagFolder);
+    Diag.Info(DiagCategory.App, "cli started", new { args, admin = Environment.IsPrivilegedProcess });
+    AppDomain.CurrentDomain.ProcessExit += (_, _) => Diag.Shutdown();
+    Console.WriteLine($"Diagnostic log: {diagFolder}");
+}
 
 int replayIdx = Array.IndexOf(args, "--replay");
 if (replayIdx >= 0 && replayIdx + 1 < args.Length)
@@ -108,8 +119,9 @@ static int RunFan(GpuMonitor monitor, string mode, string[] args)
 
     FanOptions options;
     if (mode.Equals("curve", StringComparison.OrdinalIgnoreCase)) options = new() { Mode = FanMode.Curve };
+    else if (mode.Equals("smart", StringComparison.OrdinalIgnoreCase)) options = new() { Mode = FanMode.Smart };
     else if (int.TryParse(mode, out int pct) && pct is >= 0 and <= 100) options = new() { Mode = FanMode.Fixed, FixedPercent = pct };
-    else { Console.WriteLine("Usage: --fan <0-100> | curve | auto  [--duration secs]"); return 1; }
+    else { Console.WriteLine("Usage: --fan <0-100> | curve | smart | auto  [--duration secs]"); return 1; }
 
     int durIdx = Array.IndexOf(args, "--duration");
     var duration = durIdx >= 0 && durIdx + 1 < args.Length && int.TryParse(args[durIdx + 1], out int secs)
@@ -126,7 +138,7 @@ static int RunFan(GpuMonitor monitor, string mode, string[] args)
     do
     {
         var s = monitor.Sample(gpu.Index, includeConnector: false);
-        var st = fans.Tick(new FanTemps(s.CoreTempC, s.HotspotC, s.MemoryTempC, s.HotspotMaxC));
+        var st = fans.Tick(new FanTemps(s.CoreTempC, s.HotspotC, s.MemoryTempC, s.HotspotMaxC, s.PowerWatts / s.PowerLimitWatts));
         Console.WriteLine($"{DateTime.Now:HH:mm:ss}  core {s.CoreTempC:F1} °C  fans {string.Join("/", s.FanPercents.Select(f => $"{f}%"))}  {st.Text}");
         if (st.NeedsAdmin) { result = 1; break; } // nothing to do until rerun as administrator
     } while (!done.Wait(1000) && (duration == Timeout.InfiniteTimeSpan || started.Elapsed < duration));

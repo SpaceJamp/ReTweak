@@ -168,8 +168,9 @@
 
                         <StackPanel Spacing="10" MinWidth="320">
                             <TextBlock Text="Fan control" Style="{StaticResource BodyStrongTextBlockStyle}" />
-                            <RadioButtons SelectedIndex="{x:Bind ViewModel.FanModeIndex, Mode=TwoWay}" MaxColumns="3">
+                            <RadioButtons SelectedIndex="{x:Bind ViewModel.FanModeIndex, Mode=TwoWay}" MaxColumns="4">
                                 <x:String>Auto</x:String>
+                                <x:String>Driver</x:String>
                                 <x:String>Fixed</x:String>
                                 <x:String>Curve</x:String>
                             </RadioButtons>

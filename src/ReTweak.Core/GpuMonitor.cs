@@ -112,7 +112,14 @@ public sealed class GpuMonitor : IDisposable
         _devices[gpuIndex].Detector is not null || _devices[gpuIndex].Thermal?.HasMemory == true;
 
     /// <summary>Connector-only read (fast path for high-rate sampling). Null if unsupported or the read failed.</summary>
-    public ConnectorReading? ReadConnector(int gpuIndex) => _devices[gpuIndex].Detector?.Read();
+    public ConnectorReading? ReadConnector(int gpuIndex)
+    {
+        if (_devices[gpuIndex].Detector is not { } detector) return null;
+        using var timer = Diag.Time("asus.i2c.pins");
+        var r = detector.Read();
+        if (r is null) timer.Fail("read failed");
+        return r;
+    }
 
     /// <param name="includeConnector">False when a <see cref="ConnectorSampler"/> already polls the connector.</param>
     public GpuSnapshot Sample(int gpuIndex, bool includeConnector = true)
@@ -122,31 +129,57 @@ public sealed class GpuMonitor : IDisposable
         var h = d.Nvml;
 
         static T? Get<T>(int rc, T value) where T : struct => rc == Nvml.Success ? value : null;
+        // Times one NVML call for the diagnostic log and records a failing return code.
+        static int Timed(string call, Func<int> nvml)
+        {
+            using var timer = Diag.Time(call);
+            int rc = nvml();
+            if (rc != Nvml.Success) timer.Fail(Nvml.ErrorString(rc));
+            return rc;
+        }
 
-        uint? temp = Get(Nvml.DeviceGetTemperature(h, 0, out uint t), t);
-        uint? core = Get(Nvml.DeviceGetClockInfo(h, Nvml.ClockType.Graphics, out uint c), c);
-        uint? mem = Get(Nvml.DeviceGetClockInfo(h, Nvml.ClockType.Memory, out uint m), m);
-        int utilRc = Nvml.DeviceGetUtilizationRates(h, out var util);
-        int powerRc = Nvml.DeviceGetPowerUsage(h, out uint mw);
-        int limitRc = Nvml.DeviceGetEnforcedPowerLimit(h, out uint limitMw);
-        int vramRc = Nvml.DeviceGetMemoryInfo(h, out var vram);
+        uint t = 0, c = 0, m = 0, mw = 0, limitMw = 0;
+        Nvml.Utilization util = default;
+        Nvml.Memory vram = default;
+        uint? temp = Get(Timed("nvml.temperature", () => Nvml.DeviceGetTemperature(h, 0, out t)), t);
+        uint? core = Get(Timed("nvml.clock.graphics", () => Nvml.DeviceGetClockInfo(h, Nvml.ClockType.Graphics, out c)), c);
+        uint? mem = Get(Timed("nvml.clock.memory", () => Nvml.DeviceGetClockInfo(h, Nvml.ClockType.Memory, out m)), m);
+        int utilRc = Timed("nvml.utilization", () => Nvml.DeviceGetUtilizationRates(h, out util));
+        int powerRc = Timed("nvml.power", () => Nvml.DeviceGetPowerUsage(h, out mw));
+        int limitRc = Timed("nvml.power_limit", () => Nvml.DeviceGetEnforcedPowerLimit(h, out limitMw));
+        int vramRc = Timed("nvml.memory_info", () => Nvml.DeviceGetMemoryInfo(h, out vram));
 
         var fans = new List<uint>();
         for (uint f = 0; f < d.FanCount; f++)
-            if (Nvml.DeviceGetFanSpeed(h, f, out uint pct) == Nvml.Success) fans.Add(pct);
+        {
+            uint pct = 0, fan = f;
+            if (Timed("nvml.fan_speed", () => Nvml.DeviceGetFanSpeed(h, fan, out pct)) == Nvml.Success) fans.Add(pct);
+        }
 
-        var (corePrecise, memChip) = d.Thermal?.Read() ?? (null, null);
+        (double? corePrecise, double? memChip) = (null, null);
+        if (d.Thermal is { } thermal)
+        {
+            using var timer = Diag.Time("nvapi.thermal_sensors");
+            (corePrecise, memChip) = thermal.Read();
+            if (corePrecise is null && memChip is null) timer.Fail("no reading");
+        }
 
         // Memory temperature: on ASUS boards use the board sensors by the memory (what GPU Tweak III
         // shows); otherwise fall back to the memory chips' own sensor (reads ~10 °C higher).
-        var board = d.Detector?.ReadBoardTemps();
+        IReadOnlyList<BoardTemp>? board = null;
+        if (d.Detector is { } detector)
+        {
+            using var timer = Diag.Time("asus.i2c.board_temps");
+            board = detector.ReadBoardTemps();
+            if (board is null) timer.Fail("read failed");
+        }
         var hotspot = d.Hotspot?.Summary(); // last second at 10 Hz; hotspot = channel #5, the max of sensors #1-#4
         double? memBoard = board is null ? null
             : new[] { board[AsusPowerDetector.MemorySensor1].Celsius, board[AsusPowerDetector.MemorySensor2].Celsius }.Max();
         double? memTemp = memBoard ?? memChip;
         string? memSource = memBoard is not null ? "ASUS board sensors" : memChip is not null ? "memory chip sensor" : null;
 
-        return new GpuSnapshot(
+        var snapshot = new GpuSnapshot(
             DateTime.Now,
             d.Info,
             temp,
@@ -167,7 +200,32 @@ public sealed class GpuMonitor : IDisposable
             hotspot?.AverageC,
             hotspot?.Channels,
             hotspot?.MaxC);
+        if (Diag.IsOn(DiagLevel.Debug)) LogSnapshot(snapshot, hotspot?.Samples);
+        return snapshot;
     }
+
+    /// <summary>Every reading in one diagnostic line, so a log can be replayed against a problem.</summary>
+    private static void LogSnapshot(GpuSnapshot s, int? hotspotSamples) => Diag.Debug(DiagCategory.Sensor, "snapshot", new
+    {
+        gpu = s.Gpu.Index,
+        coreC = s.CoreTempC,
+        coreNvmlC = s.TemperatureC,
+        hotspotC = s.HotspotC,
+        hotspotMaxC = s.HotspotMaxC,
+        hotspotSamples,
+        thermalChannelsC = s.ThermalChannels,
+        memoryC = s.MemoryTempC,
+        memorySource = s.MemoryTempSource,
+        board = s.BoardTemps?.Select(b => new { b.Name, b.Celsius }),
+        coreMhz = s.CoreClockMhz,
+        memMhz = s.MemoryClockMhz,
+        loadPct = s.GpuUtilization,
+        memLoadPct = s.MemoryUtilization,
+        powerW = s.PowerWatts,
+        powerLimitW = s.PowerLimitWatts,
+        fansPct = s.FanPercents,
+        vramUsedMiB = s.VramUsedBytes / 1048576,
+    });
 
     public int FanCount(int gpuIndex) => (int)_devices[gpuIndex].FanCount;
 
@@ -187,8 +245,14 @@ public sealed class GpuMonitor : IDisposable
         var d = _devices[gpuIndex];
         if (d.FanCount == 0) return "this card reports no fans";
         for (uint f = 0; f < d.FanCount; f++)
+        {
+            using var timer = Diag.Time("nvml.set_fan_speed");
             if (Nvml.DeviceSetFanSpeed(d.Nvml, f, (uint)percent) is var rc && rc != Nvml.Success)
+            {
+                timer.Fail(Nvml.ErrorString(rc));
                 return Nvml.ErrorString(rc);
+            }
+        }
         return null;
     }
 
@@ -199,8 +263,14 @@ public sealed class GpuMonitor : IDisposable
         var d = _devices[gpuIndex];
         string? error = null;
         for (uint f = 0; f < d.FanCount; f++) // try every fan even if one fails
+        {
+            using var timer = Diag.Time("nvml.restore_fan");
             if (Nvml.DeviceSetDefaultFanSpeed(d.Nvml, f) is var rc && rc != Nvml.Success)
+            {
+                timer.Fail(Nvml.ErrorString(rc));
                 error ??= Nvml.ErrorString(rc);
+            }
+        }
         return error;
     }
 

@@ -7,7 +7,8 @@ namespace ReTweak.App;
 /// <summary>Settings dialog. Returns the saved settings, or null if cancelled.</summary>
 internal static class SettingsDialog
 {
-    public static async Task<AppSettings?> ShowAsync(XamlRoot root, AppSettings current, string? activeLogPath)
+    /// <param name="saveDiagnostics">Writes the diagnostics zip and returns its path.</param>
+    public static async Task<AppSettings?> ShowAsync(XamlRoot root, AppSettings current, string? activeLogPath, Func<string> saveDiagnostics)
     {
         var o = current.Alerts;
 
@@ -35,6 +36,43 @@ internal static class SettingsDialog
         var toasts = new ToggleSwitch { Header = "Windows notifications for warnings and critical alerts", IsOn = current.Toasts };
         var log = new ToggleSwitch { Header = "Log connector readings to CSV", IsOn = current.LogConnector };
         var logFolder = new TextBox { Header = "Log folder", Text = current.LogFolder };
+        // Diagnostic log
+        var diagLevel = new ComboBox
+        {
+            Header = "Diagnostic log", MinWidth = 300,
+            ItemsSource = new[]
+            {
+                "Off",
+                "Events: startup, settings, alerts, errors, fan mode changes",
+                "Detailed: + every sensor reading, fan decision, driver-call timing",
+                "Everything: + raw 10 Hz hotspot reads (large files)",
+            },
+            SelectedIndex = current.DiagnosticsLevel switch { DiagLevel.Off => 0, DiagLevel.Info => 1, DiagLevel.Debug => 2, _ => 3 },
+            IsEnabled = !Diagnostics.ForcedByArg,
+        };
+        var diagNote = new TextBlock
+        {
+            Text = (Diagnostics.ForcedByArg ? "Started with --debug: logging everything for this run. " : "") +
+                   (Diag.CurrentFile is { } f0 ? $"Writing {f0}" : $"Files go to {Diagnostics.Folder} (10 MB each, last 10 kept)."),
+            Style = (Style)Application.Current.Resources["CaptionTextBlockStyle"],
+            TextWrapping = TextWrapping.Wrap,
+        };
+        var saveDiag = new Button { Content = "Save diagnostics to Desktop" };
+        var openDiag = new HyperlinkButton { Content = "Open log folder" };
+        saveDiag.Click += (_, _) =>
+        {
+            try { Diagnostics.Reveal(saveDiagnostics()); }
+            catch (Exception ex) { diagNote.Text = $"Couldn't save diagnostics: {ex.Message}"; }
+        };
+        openDiag.Click += (_, _) =>
+        {
+            Directory.CreateDirectory(Diagnostics.Folder);
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(Diagnostics.Folder) { UseShellExecute = true });
+        };
+        var diagButtons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 12 };
+        diagButtons.Children.Add(saveDiag);
+        diagButtons.Children.Add(openDiag);
+
         var logNote = new TextBlock
         {
             Text = activeLogPath is null ? "Not logging right now." : $"Logging to {activeLogPath}",
@@ -102,9 +140,18 @@ internal static class SettingsDialog
         var f = current.Fans;
         var fanMode = new ComboBox
         {
-            Header = "Fan mode", MinWidth = 220, SelectedIndex = (int)f.Mode,
-            ItemsSource = new[] { "Auto (driver, with safety net)", "Fixed speed", "Curve" },
+            Header = "Fan mode", MinWidth = 220, SelectedIndex = Math.Max(0, Array.IndexOf(MainViewModel.FanModeOrder, f.Mode)),
+            ItemsSource = new[] { "Auto (ReTweak holds a target)", "Driver (card's curve + safety net)", "Fixed speed", "Curve" },
         };
+        var smartHot = Num("Auto: hold the hotspot at (°C)", f.SmartTargetHotspotC);
+        var smartCore = Num("Auto: without a hotspot, hold the core at (°C)", f.SmartTargetCoreC);
+        foreach (var n in new[] { smartHot, smartCore }) n.SmallChange = 1;
+        var smartPriority = new ComboBox
+        {
+            Header = "Auto: favour", MinWidth = 220, SelectedIndex = (int)f.SmartPriority,
+            ItemsSource = new[] { "Quiet (slow, rare changes)", "Balanced", "Tight (holds within ~1 °C)" },
+        };
+        var smartIdle = new ToggleSwitch { Header = "Auto: let the driver stop the fans at idle (0 RPM)", IsOn = f.SmartIdleStop };
         var fanSource = new ComboBox
         {
             Header = "Curve follows", MinWidth = 220, SelectedIndex = (int)f.Source,
@@ -192,6 +239,8 @@ internal static class SettingsDialog
         {
             var d = new FanOptions();
             fanSource.SelectedIndex = (int)d.Source;
+            smartHot.Value = d.SmartTargetHotspotC; smartCore.Value = d.SmartTargetCoreC;
+            smartPriority.SelectedIndex = (int)d.SmartPriority; smartIdle.IsOn = d.SmartIdleStop;
             fanFixed.Value = d.FixedPercent; fanHyst.Value = d.HysteresisC;
             rampUp.Value = d.RampUpPerSecond; rampDown.Value = d.RampDownPerSecond; smoothing.Value = d.SmoothingSeconds;
             zeroRpm.IsOn = d.ZeroRpm; zeroBelow.Value = d.ZeroRpmBelowC;
@@ -214,8 +263,10 @@ internal static class SettingsDialog
         {
             error, Section("General"), autostart, autostartNote, tray, toasts,
             Section("Logging"), log, logFolder, logNote,
+            Section("Diagnostics"), diagLevel, diagNote, diagButtons,
             Section("Alert thresholds"), grid, reset,
             Section("Fan control"), fanNote, Pairs((fanMode, fanSource)), fanFixed,
+            Section("Auto"), Pairs((smartHot, smartCore), (smartPriority, null)), smartIdle,
             Section("Curve"), presetRow, curveGrid, Pairs((fanHyst, smoothing), (rampUp, rampDown)), zeroRpm, zeroBelow,
             Section("Failsafes (all modes that write)"), Pairs((failCore, failHot), (failMem, null)),
             Section("Auto safety net"), assistNote, assist, Pairs((assistHot, assistMem), (assistGap, assistBoost), (assistHold, assistMargin)),
@@ -261,13 +312,17 @@ internal static class SettingsDialog
 
             var fanBoxes = curveTemps.Concat(curvePcts).Concat(new[]
             {
-                fanFixed, fanHyst, rampUp, rampDown, smoothing, zeroBelow, failCore, failHot, failMem,
+                fanFixed, fanHyst, rampUp, rampDown, smoothing, zeroBelow, failCore, failHot, failMem, smartHot, smartCore,
                 assistHot, assistMem, assistGap, assistBoost, assistHold, assistMargin,
             });
             if (problem is null && fanBoxes.Any(b => double.IsNaN(b.Value))) problem = "Every fan setting needs a number.";
             var fans = current.Fans with
             {
-                Mode = (FanMode)Math.Max(0, fanMode.SelectedIndex),
+                Mode = MainViewModel.FanModeOrder[Math.Max(0, fanMode.SelectedIndex)],
+                SmartTargetHotspotC = smartHot.Value,
+                SmartTargetCoreC = smartCore.Value,
+                SmartPriority = (SmartPriority)Math.Max(0, smartPriority.SelectedIndex),
+                SmartIdleStop = smartIdle.IsOn,
                 Source = (FanSource)Math.Max(0, fanSource.SelectedIndex),
                 FixedPercent = (int)Math.Round(fanFixed.Value),
                 Curve = Enumerable.Range(0, CurvePoints).Select(i => new FanPoint(curveTemps[i].Value, (int)Math.Round(curvePcts[i].Value))).ToList(),
@@ -299,6 +354,8 @@ internal static class SettingsDialog
                 Toasts = toasts.IsOn,
                 LogConnector = log.IsOn,
                 LogFolder = logFolder.Text.Trim(),
+                DiagnosticsLevel = Diagnostics.ForcedByArg ? current.DiagnosticsLevel
+                    : diagLevel.SelectedIndex switch { 1 => DiagLevel.Info, 2 => DiagLevel.Debug, 3 => DiagLevel.Trace, _ => DiagLevel.Off },
             };
 
             bool wantStart = autostart.IsOn;

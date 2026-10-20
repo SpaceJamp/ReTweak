@@ -137,7 +137,10 @@ public sealed partial class MainViewModel : Observable, IDisposable
     public SolidColorBrush FanStatusBrush { get => _fanBrush; private set => Set(ref _fanBrush, value); }
     public bool FanNeedsAdmin { get => _fanNeedsAdmin; private set => Set(ref _fanNeedsAdmin, value); }
     public string FanSpeedRange { get => _fanSpeedRange; private set => Set(ref _fanSpeedRange, value); }
-    /// <summary>Selected index of the dashboard's Auto / Fixed / Curve buttons; setting it saves the mode.</summary>
+    /// <summary>Order of the mode buttons and Settings list: Auto (smart) first, then Driver, Fixed, Curve.</summary>
+    public static readonly FanMode[] FanModeOrder = [FanMode.Smart, FanMode.Driver, FanMode.Fixed, FanMode.Curve];
+
+    /// <summary>Selected index of the dashboard's mode buttons (see <see cref="FanModeOrder"/>); setting it saves the mode.</summary>
     public int FanModeIndex
     {
         get => _fanModeIndex;
@@ -145,7 +148,7 @@ public sealed partial class MainViewModel : Observable, IDisposable
         {
             if (value < 0 || value == _fanModeIndex) return;
             Set(ref _fanModeIndex, value);
-            var updated = _settings with { Fans = _settings.Fans with { Mode = (FanMode)value } };
+            var updated = _settings with { Fans = _settings.Fans with { Mode = FanModeOrder[value] } };
             try { updated.Save(); } catch (Exception) { /* still apply it for this session */ }
             Apply(updated);
             PollGpu(); // react now rather than in up to a second
@@ -239,16 +242,21 @@ public sealed partial class MainViewModel : Observable, IDisposable
     /// <summary>Applies settings live: thresholds from the next frame, logging on/off, toasts.</summary>
     public void Apply(AppSettings settings)
     {
+        Diagnostics.Apply(settings.DiagnosticsLevel);
+        Diag.Info(DiagCategory.Settings, "settings applied", settings);
         _settings = settings;
         Notifications.Enabled = settings.Toasts;
         _alerts.Options = settings.Alerts;
         if (_fan is not null)
         {
             _fan.Options = settings.Fans;
-            Set(ref _fanModeIndex, (int)settings.Fans.Mode, nameof(FanModeIndex));
-            FanChartLabel = settings.Fans.Mode == FanMode.Auto
-                ? "Fan control · the dot is now"
-                : "Fan curve · the dot is now";
+            Set(ref _fanModeIndex, Math.Max(0, Array.IndexOf(FanModeOrder, settings.Fans.Mode)), nameof(FanModeIndex));
+            FanChartLabel = settings.Fans.Mode switch
+            {
+                FanMode.Smart => "Auto · holds the target · the dot is now",
+                FanMode.Driver => "Driver · the dot is now",
+                _ => "Fan curve · the dot is now",
+            };
         }
         if (_sampler is null) return;
         bool logging = _sampler.LogPath is not null;
@@ -262,6 +270,9 @@ public sealed partial class MainViewModel : Observable, IDisposable
     }
 
     public string? LogPath => _sampler?.LogPath;
+
+    /// <summary>Zips logs, settings and an environment summary to the Desktop; returns the zip's path.</summary>
+    public string SaveDiagnostics() => Diagnostics.SaveBundle(_monitor, _settings);
 
     private void PollGpu()
     {
@@ -303,15 +314,15 @@ public sealed partial class MainViewModel : Observable, IDisposable
     {
         if (_fan is null) return;
         FanStatus st;
-        try { st = _fan.Tick(new FanTemps(s.CoreTempC, s.HotspotC, s.MemoryTempC, s.HotspotMaxC)); }
+        try { st = _fan.Tick(new FanTemps(s.CoreTempC, s.HotspotC, s.MemoryTempC, s.HotspotMaxC, s.PowerWatts / s.PowerLimitWatts)); }
         catch (Exception ex) { st = new(_fan.Options.Mode, null, $"Fan control error: {ex.Message}", AlertSeverity.Warning); }
         FanTempC = st.SourceTempC ?? s.CoreTempC;
         // Unelevated, Auto is simply the driver's curve; mention the safety net quietly instead of
         // nagging with the restart button (that's for Fixed and Curve, which can't work at all).
-        bool autoUnelevated = st.Mode == FanMode.Auto && !Elevation.IsAdmin;
+        bool autoUnelevated = st.Mode == FanMode.Driver && !Elevation.IsAdmin;
         FanStatus = autoUnelevated && _fan.Options.AutoAssist ? "Automatic (driver). The safety net works when ReTweak runs as administrator." : st.Text;
         FanNeedsAdmin = st.NeedsAdmin && !autoUnelevated && !Elevation.IsAdmin;
-        FanStatusBrush = st.Severity > AlertSeverity.None ? Theme.For(st.Severity) : st.Mode == FanMode.Auto ? Theme.Muted : Theme.Ok;
+        FanStatusBrush = st.Severity > AlertSeverity.None ? Theme.For(st.Severity) : st.Mode == FanMode.Driver ? Theme.Muted : Theme.Ok;
         FanChanged?.Invoke();
     }
 
@@ -351,6 +362,8 @@ public sealed partial class MainViewModel : Observable, IDisposable
 
     private void OnAlert(Alert a)
     {
+        Diag.Write(a.Severity >= AlertSeverity.Warning ? DiagLevel.Warn : DiagLevel.Info, DiagCategory.Alert, "alert",
+                   new { a.Key, severity = a.Severity.ToString(), a.Title, a.Detail, a.Since });
         var vm = new AlertViewModel(a.Key, a.Title, a.Detail, Theme.InfoBar(a.Severity));
         var existing = Alerts.FirstOrDefault(x => x.Key == a.Key);
         if (existing is not null) Alerts[Alerts.IndexOf(existing)] = vm;
@@ -361,6 +374,7 @@ public sealed partial class MainViewModel : Observable, IDisposable
 
     private void OnCleared(string key)
     {
+        Diag.Info(DiagCategory.Alert, "alert cleared", new { key });
         var existing = Alerts.FirstOrDefault(x => x.Key == key);
         if (existing is not null) Alerts.Remove(existing);
         RefreshStatus();
