@@ -62,6 +62,7 @@ public sealed partial class MainViewModel : Observable, IDisposable
 
     private readonly GpuMonitor _monitor;
     private readonly ConnectorSampler? _sampler;
+    private readonly FanController? _fan;
     private readonly AlertEngine _alerts; // shared: connector frames (sampler thread) + GPU temps (UI thread)
     private readonly DispatcherQueueTimer _timer;
     private readonly DispatcherQueue _ui = DispatcherQueue.GetForCurrentThread();
@@ -115,6 +116,34 @@ public sealed partial class MainViewModel : Observable, IDisposable
 
     public ObservableCollection<AlertViewModel> Alerts { get; } = [];
 
+    private string _fanStatus = "", _fanSpeedRange = "";
+    private SolidColorBrush _fanBrush = Theme.Muted;
+    private bool _fanNeedsAdmin;
+    private int _fanModeIndex;
+    public bool HasFanControl => _fan is not null;
+    public string FanStatus { get => _fanStatus; private set => Set(ref _fanStatus, value); }
+    public SolidColorBrush FanStatusBrush { get => _fanBrush; private set => Set(ref _fanBrush, value); }
+    public bool FanNeedsAdmin { get => _fanNeedsAdmin; private set => Set(ref _fanNeedsAdmin, value); }
+    public string FanSpeedRange { get => _fanSpeedRange; private set => Set(ref _fanSpeedRange, value); }
+    /// <summary>Selected index of the dashboard's Auto / Fixed / Curve buttons; setting it saves the mode.</summary>
+    public int FanModeIndex
+    {
+        get => _fanModeIndex;
+        set
+        {
+            if (value < 0 || value == _fanModeIndex) return;
+            Set(ref _fanModeIndex, value);
+            var updated = _settings with { Fans = _settings.Fans with { Mode = (FanMode)value } };
+            try { updated.Save(); } catch (Exception) { /* still apply it for this session */ }
+            Apply(updated);
+            PollGpu(); // react now rather than in up to a second
+        }
+    }
+    /// <summary>Last core temperature the fans were driven from, for the curve chart.</summary>
+    public double? FanTempC { get; private set; }
+    /// <summary>Raised on the UI thread when the fan status or curve changes.</summary>
+    public event Action? FanChanged;
+
     public List<double> PowerHistory { get; } = [];
     public List<double> VoltHistory { get; } = [];
     public event Action? HistoryChanged;
@@ -147,6 +176,15 @@ public sealed partial class MainViewModel : Observable, IDisposable
             _sampler.Start();
         }
 
+        if (monitor.FanCount(_gpu) > 0)
+        {
+            _fan = new FanController(monitor, _gpu);
+            FanSpeedRange = $"Driver allows {_fan.Range.Min}-{_fan.Range.Max} %";
+            // A manual speed would outlive ReTweak, so hand the fans back however the process ends.
+            AppDomain.CurrentDomain.ProcessExit += (_, _) => _fan.Dispose();
+            AppDomain.CurrentDomain.UnhandledException += (_, _) => _fan.Dispose();
+        }
+
         Apply(settings);
         _timer = _ui.CreateTimer();
         _timer.Interval = TimeSpan.FromSeconds(1);
@@ -161,6 +199,11 @@ public sealed partial class MainViewModel : Observable, IDisposable
         _settings = settings;
         Notifications.Enabled = settings.Toasts;
         _alerts.Options = settings.Alerts;
+        if (_fan is not null)
+        {
+            _fan.Options = settings.Fans;
+            Set(ref _fanModeIndex, (int)settings.Fans.Mode, nameof(FanModeIndex));
+        }
         if (_sampler is null) return;
         bool logging = _sampler.LogPath is not null;
         if (settings.LogConnector && (!logging || !_sampler.LogPath!.StartsWith(settings.LogFolder, StringComparison.OrdinalIgnoreCase)))
@@ -196,12 +239,32 @@ public sealed partial class MainViewModel : Observable, IDisposable
         PowerLimit = s.PowerLimitWatts is double l ? $"of {l:F0} W limit" : "";
         PowerPercent = s.PowerWatts is double pw && s.PowerLimitWatts is double pl && pl > 0 ? Math.Clamp(pw / pl * 100, 0, 100) : 0;
         Fans = s.FanPercents.Count > 0 ? string.Join(" / ", s.FanPercents.Select(f => $"{f}%")) : "-";
+        CurrentFanPercent = s.FanPercents.Count > 0 ? s.FanPercents.Average(f => (double)f) : null;
         if (s.VramTotalBytes is ulong total && s.VramUsedBytes is ulong used)
         {
             Vram = $"{used / 1073741824.0:F1} / {total / 1073741824.0:F0} GB";
             VramPercent = (double)used / total * 100;
         }
+        UpdateFans(s.CoreTempC);
     }
+
+    private void UpdateFans(double? coreTempC)
+    {
+        if (_fan is null) return;
+        FanStatus st;
+        try { st = _fan.Tick(coreTempC); }
+        catch (Exception ex) { st = new(_fan.Options.Mode, null, $"Fan control error: {ex.Message}", AlertSeverity.Warning); }
+        FanTempC = coreTempC;
+        FanStatus = st.Text;
+        FanNeedsAdmin = st.NeedsAdmin && !Elevation.IsAdmin;
+        FanStatusBrush = st.Severity > AlertSeverity.None ? Theme.For(st.Severity) : st.Mode == FanMode.Auto ? Theme.Muted : Theme.Ok;
+        FanChanged?.Invoke();
+    }
+
+    public FanOptions FanOptions => _settings.Fans;
+    public int? FanAppliedPercent => _fan?.Status.Percent;
+    /// <summary>Average reported fan speed (%), for the chart while the driver is in charge.</summary>
+    public double? CurrentFanPercent { get; private set; }
 
     private void OnFrame(ConnectorFrame f)
     {
@@ -261,6 +324,7 @@ public sealed partial class MainViewModel : Observable, IDisposable
     public void Dispose()
     {
         _timer.Stop();
+        _fan?.Dispose(); // back to the driver's curve before NVML shuts down
         _sampler?.Dispose();
         _monitor.Dispose();
     }

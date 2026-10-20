@@ -5,7 +5,7 @@ namespace ReTweak.Core.Interop;
 
 /// <summary>
 /// Minimal NVML bindings. nvml.dll ships with every NVIDIA driver (System32).
-/// Only documented, read-only queries are used here.
+/// Only documented calls are used here; all are read-only except the fan-control setters.
 /// </summary>
 internal static partial class Nvml
 {
@@ -84,6 +84,31 @@ internal static partial class Nvml
 
     [LibraryImport(Lib, EntryPoint = "nvmlDeviceGetFanSpeed_v2")]
     public static partial int DeviceGetFanSpeed(nint device, uint fan, out uint percent);
+
+    // Fan control: the only calls that write to the GPU. Setting a speed needs administrator rights.
+    public const int NoPermission = 4;
+
+    [LibraryImport(Lib, EntryPoint = "nvmlDeviceGetMinMaxFanSpeed")]
+    public static partial int DeviceGetMinMaxFanSpeed(nint device, out uint min, out uint max);
+
+    [LibraryImport(Lib, EntryPoint = "nvmlDeviceGetTargetFanSpeed")]
+    public static partial int DeviceGetTargetFanSpeed(nint device, uint fan, out uint percent);
+
+    /// <summary>Takes the fan off the driver's automatic control and holds it at <paramref name="percent"/>.</summary>
+    [LibraryImport(Lib, EntryPoint = "nvmlDeviceSetFanSpeed_v2")]
+    public static partial int DeviceSetFanSpeed(nint device, uint fan, uint percent);
+
+    /// <summary>Hands the fan back to the driver's (and the card's VBIOS) automatic curve.</summary>
+    [LibraryImport(Lib, EntryPoint = "nvmlDeviceSetDefaultFanSpeed_v2")]
+    public static partial int DeviceSetDefaultFanSpeed(nint device, uint fan);
+
+    public static string ErrorString(int rc) => rc switch
+    {
+        Success => "ok",
+        NotSupported => "not supported on this card",
+        NoPermission => "needs administrator rights",
+        _ => $"NVML error {rc}",
+    };
 
     public static unsafe string GetDriverVersion()
     {

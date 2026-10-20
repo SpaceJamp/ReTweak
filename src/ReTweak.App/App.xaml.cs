@@ -14,7 +14,11 @@ public partial class App : Application
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
-        _singleInstance = new Mutex(initiallyOwned: true, @"Local\ReTweak.SingleInstance", out bool first);
+        var cmdArgs = Environment.GetCommandLineArgs();
+        bool first;
+        try { _singleInstance = new Mutex(initiallyOwned: true, @"Local\ReTweak.SingleInstance", out first); }
+        catch (UnauthorizedAccessException) { first = false; } // an elevated copy owns it
+        if (!first && _singleInstance is not null && cmdArgs.Contains(Elevation.RestartArg)) first = WaitForPreviousInstance(_singleInstance);
         if (!first)
         {
             TrayIcon.SignalRunningInstance(); // bring the running copy to the front instead
@@ -23,7 +27,7 @@ public partial class App : Application
         }
 
         // --minimized: started with Windows; stay in the tray until the user opens the window.
-        bool minimized = Environment.GetCommandLineArgs().Contains("--minimized", StringComparer.OrdinalIgnoreCase);
+        bool minimized = cmdArgs.Contains("--minimized", StringComparer.OrdinalIgnoreCase);
         Notifications.Register();
         try
         {
@@ -36,5 +40,12 @@ public partial class App : Application
         }
         _window.Closed += (_, _) => Notifications.Unregister();
         if (!minimized) _window.Activate();
+    }
+
+    /// <summary>The unelevated copy is exiting after starting this one; take over once it has.</summary>
+    private static bool WaitForPreviousInstance(Mutex mutex)
+    {
+        try { return mutex.WaitOne(TimeSpan.FromSeconds(10)); }
+        catch (AbandonedMutexException) { return true; } // it exited without releasing: ours now
     }
 }

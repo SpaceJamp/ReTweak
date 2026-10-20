@@ -13,6 +13,7 @@ public sealed record AppSettings
     private static readonly JsonSerializerOptions Json = new() { WriteIndented = true };
 
     public AlertOptions Alerts { get; init; } = new();
+    public FanOptions Fans { get; init; } = new();
     /// <summary>Closing the window keeps ReTweak monitoring in the tray.</summary>
     public bool CloseToTray { get; init; } = true;
     public bool Toasts { get; init; } = true;

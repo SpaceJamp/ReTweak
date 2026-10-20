@@ -128,6 +128,44 @@
                     </Border>
                 </Grid>
 
+                <!-- Fan control -->
+                <Border Style="{StaticResource Card}" Visibility="{x:Bind ViewModel.HasFanControl}">
+                    <Grid ColumnSpacing="24">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+
+                        <StackPanel Spacing="10" MinWidth="320">
+                            <TextBlock Text="Fan control" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                            <RadioButtons SelectedIndex="{x:Bind ViewModel.FanModeIndex, Mode=TwoWay}" MaxColumns="3">
+                                <x:String>Auto</x:String>
+                                <x:String>Fixed</x:String>
+                                <x:String>Curve</x:String>
+                            </RadioButtons>
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <Ellipse Width="10" Height="10" Fill="{x:Bind ViewModel.FanStatusBrush, Mode=OneWay}" VerticalAlignment="Center" />
+                                <TextBlock Text="{x:Bind ViewModel.FanStatus, Mode=OneWay}" TextWrapping="Wrap" MaxWidth="300" />
+                            </StackPanel>
+                            <Button Content="Restart as administrator" Click="RestartElevated_Click"
+                                    Visibility="{x:Bind ViewModel.FanNeedsAdmin, Mode=OneWay}"
+                                    Style="{StaticResource AccentButtonStyle}" />
+                            <TextBlock Style="{StaticResource CaptionTextBlockStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                       TextWrapping="Wrap" MaxWidth="320"
+                                       Text="Edit the curve, fixed speed and failsafe in Settings. Auto, closing ReTweak or a lost temperature reading hands the fans back to the driver." />
+                        </StackPanel>
+
+                        <StackPanel Grid.Column="1" Spacing="6">
+                            <TextBlock Style="{StaticResource TileLabel}">
+                                <Run Text="Fan curve · core °C → fan % (dot: now)" />
+                                <Run Text="{x:Bind ViewModel.FanSpeedRange}" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                            </TextBlock>
+                            <Canvas x:Name="FanChart" Height="140" SizeChanged="Chart_SizeChanged"
+                                    Background="{ThemeResource ControlFillColorTransparentBrush}" />
+                        </StackPanel>
+                    </Grid>
+                </Border>
+
                 <!-- ASUS board temperature sensors -->
                 <Border Style="{StaticResource Card}" Visibility="{x:Bind ViewModel.HasBoardTemps}">
                     <StackPanel Spacing="10">

@@ -7,6 +7,9 @@ using ReTweak.Core;
 // ReTweak.Cli --bench         connector sensor latency / noise
 // ReTweak.Cli --simulate      run alert engine against scripted failures (no hardware)
 // ReTweak.Cli --replay file.csv   run a logged session through the current alert engine
+// ReTweak.Cli --fans          fan count, allowed range, current and target speeds
+// ReTweak.Cli --fan <pct>|curve [--duration secs]   drive the fans until Ctrl+C, then hand them back (admin)
+// ReTweak.Cli --fan auto      hand the fans back to the driver (e.g. after a crash) (admin)
 
 int replayIdx = Array.IndexOf(args, "--replay");
 if (replayIdx >= 0 && replayIdx + 1 < args.Length)
@@ -26,6 +29,27 @@ using var monitor = new GpuMonitor();
 if (args.Contains("--bench"))
 {
     Bench.Run(monitor);
+    return;
+}
+
+if (args.Contains("--fans"))
+{
+    foreach (var gpu in monitor.Gpus)
+    {
+        var range = monitor.FanSpeedRange(gpu.Index);
+        var s = monitor.Sample(gpu.Index, includeConnector: false);
+        Console.WriteLine($"[{gpu.Index}] {gpu.Name}: {monitor.FanCount(gpu.Index)} fan(s), manual range " +
+                          (range is var (min, max) ? $"{min}-{max}%" : "unknown"));
+        for (int f = 0; f < monitor.FanCount(gpu.Index); f++)
+            Console.WriteLine($"    fan {f}: {(f < s.FanPercents.Count ? $"{s.FanPercents[f]}%" : "-")}  target {monitor.FanTarget(gpu.Index, f)?.ToString() ?? "-"}%");
+    }
+    return;
+}
+
+int fanIdx = Array.IndexOf(args, "--fan");
+if (fanIdx >= 0)
+{
+    Environment.ExitCode = RunFan(monitor, fanIdx + 1 < args.Length ? args[fanIdx + 1] : "", args);
     return;
 }
 
@@ -62,6 +86,48 @@ do
     }
     if (watch) { Thread.Sleep(1000); Console.WriteLine(); }
 } while (watch);
+
+static int RunFan(GpuMonitor monitor, string mode, string[] args)
+{
+    var gpu = monitor.Gpus.FirstOrDefault(g => monitor.FanCount(g.Index) > 0);
+    if (gpu is null) { Console.WriteLine("No GPU with controllable fans found."); return 1; }
+
+    if (mode.Equals("auto", StringComparison.OrdinalIgnoreCase))
+    {
+        var err = monitor.RestoreAutoFans(gpu.Index);
+        Console.WriteLine(err is null ? "Fans are back on the driver's automatic curve." : $"Couldn't restore automatic fans: {err}");
+        return err is null ? 0 : 1;
+    }
+
+    FanOptions options;
+    if (mode.Equals("curve", StringComparison.OrdinalIgnoreCase)) options = new() { Mode = FanMode.Curve };
+    else if (int.TryParse(mode, out int pct) && pct is >= 0 and <= 100) options = new() { Mode = FanMode.Fixed, FixedPercent = pct };
+    else { Console.WriteLine("Usage: --fan <0-100> | curve | auto  [--duration secs]"); return 1; }
+
+    int durIdx = Array.IndexOf(args, "--duration");
+    var duration = durIdx >= 0 && durIdx + 1 < args.Length && int.TryParse(args[durIdx + 1], out int secs)
+        ? TimeSpan.FromSeconds(secs) : Timeout.InfiniteTimeSpan;
+
+    using var fans = new FanController(monitor, gpu.Index) { Options = options };
+    var done = new ManualResetEventSlim();
+    Console.CancelKeyPress += (_, e) => { e.Cancel = true; done.Set(); };
+    AppDomain.CurrentDomain.ProcessExit += (_, _) => fans.Dispose(); // console closed: still hand the fans back
+
+    Console.WriteLine($"Controlling {gpu.Name} fans ({options.Mode}, failsafe {options.FailsafeTempC:F0} °C). Ctrl+C to stop.");
+    var started = System.Diagnostics.Stopwatch.StartNew();
+    int result = 0;
+    do
+    {
+        var s = monitor.Sample(gpu.Index, includeConnector: false);
+        var st = fans.Tick(s.CoreTempC);
+        Console.WriteLine($"{DateTime.Now:HH:mm:ss}  core {s.CoreTempC:F1} °C  fans {string.Join("/", s.FanPercents.Select(f => $"{f}%"))}  {st.Text}");
+        if (st.NeedsAdmin) { result = 1; break; } // nothing to do until rerun as administrator
+    } while (!done.Wait(1000) && (duration == Timeout.InfiniteTimeSpan || started.Elapsed < duration));
+
+    fans.Dispose();
+    Console.WriteLine("Fans handed back to the driver.");
+    return result;
+}
 
 static void RunAlerts(GpuMonitor monitor, string[] args)
 {

@@ -3,8 +3,9 @@ using ReTweak.Core.Interop;
 namespace ReTweak.Core;
 
 /// <summary>
-/// Read-only monitor for NVIDIA GPUs. General sensors come from NVML; ASUS cards
+/// Monitor for NVIDIA GPUs. General sensors come from NVML; ASUS cards
 /// with a Power Detector chip additionally get per-pin connector readings.
+/// Everything is read-only except the fan setters, which <see cref="FanController"/> drives.
 /// <see cref="Sample"/> and <see cref="ReadConnector"/> may run on different threads,
 /// but each should only be called from one thread at a time.
 /// </summary>
@@ -130,6 +131,41 @@ public sealed class GpuMonitor : IDisposable
             memTemp,
             board,
             memSource);
+    }
+
+    public int FanCount(int gpuIndex) => (int)_devices[gpuIndex].FanCount;
+
+    /// <summary>Lowest and highest manual fan speed the driver accepts (%), or null if unknown.</summary>
+    public (int Min, int Max)? FanSpeedRange(int gpuIndex) =>
+        Nvml.DeviceGetMinMaxFanSpeed(_devices[gpuIndex].Nvml, out uint min, out uint max) == Nvml.Success && max > min
+            ? ((int)min, (int)max) : null;
+
+    /// <summary>Speed the driver is currently driving fan <paramref name="fan"/> towards (%), or null.</summary>
+    public int? FanTarget(int gpuIndex, int fan) =>
+        Nvml.DeviceGetTargetFanSpeed(_devices[gpuIndex].Nvml, (uint)fan, out uint pct) == Nvml.Success ? (int)pct : null;
+
+    /// <summary>Holds every fan at <paramref name="percent"/>. Returns null on success, else why it failed.</summary>
+    public string? SetFanSpeed(int gpuIndex, int percent)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        var d = _devices[gpuIndex];
+        if (d.FanCount == 0) return "this card reports no fans";
+        for (uint f = 0; f < d.FanCount; f++)
+            if (Nvml.DeviceSetFanSpeed(d.Nvml, f, (uint)percent) is var rc && rc != Nvml.Success)
+                return Nvml.ErrorString(rc);
+        return null;
+    }
+
+    /// <summary>Returns every fan to the driver's automatic curve. Null on success, else why it failed.</summary>
+    public string? RestoreAutoFans(int gpuIndex)
+    {
+        if (_disposed) return "monitor closed";
+        var d = _devices[gpuIndex];
+        string? error = null;
+        for (uint f = 0; f < d.FanCount; f++) // try every fan even if one fails
+            if (Nvml.DeviceSetDefaultFanSpeed(d.Nvml, f) is var rc && rc != Nvml.Success)
+                error ??= Nvml.ErrorString(rc);
+        return error;
     }
 
     public void Dispose()
