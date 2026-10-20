@@ -54,7 +54,9 @@ public sealed record GpuSnapshot(
     double? MemoryTempC = null,
     IReadOnlyList<BoardTemp>? BoardTemps = null,
     string? MemoryTempSource = null,
-    double? HotspotC = null)
+    double? HotspotC = null,                      // RTX 50 hotspot, averaged over the last second (10 Hz)
+    IReadOnlyList<double?>? ThermalChannels = null, // each GPU thermal channel, averaged the same way
+    double? HotspotMaxC = null)                   // highest hotspot reading in the last second
 {
     /// <summary>Best available core temperature: the precise sensor if present, else NVML's integer value.</summary>
     public double? CoreTempC => CoreTempPreciseC ?? TemperatureC;

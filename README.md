@@ -12,15 +12,20 @@ going wrong.
 - **Temperatures**: precise core (0.01 °C) and memory on RTX 50; on ASUS cards, memory comes from the
   board sensors GPU Tweak III uses, plus 8 board sensors (VRM, core, memory and more)
 - Early-warning alerts: pin over-current, low/high voltage, pin-to-pin voltage spread, current imbalance, fast voltage drops or current ramps, frozen sensor, high core or memory temperature
-- **Fan control**: Auto (driver), a fixed speed, or a 5-point temperature curve with hysteresis
-  and a full-speed failsafe; edit it in Settings, switch modes on the dashboard
+- **Fan control**: Auto (driver) with a safety net, a fixed speed, or a 5-point curve (drag the points
+  on the dashboard, or pick Quiet / Balanced / Performance). The curve can follow the core, hotspot,
+  memory or the hottest of them; speed changes are ramped and the temperature averaged so the fans don't
+  step on short spikes; optional 0 RPM below a temperature you choose. Full speed at a core, hotspot or
+  memory failsafe in every mode that writes. The Auto safety net leaves the driver in charge and only steps in
+  when the hotspot or memory gets too hot, or the hotspot runs far ahead of the core (poor cooler contact)
 - Native Windows notifications for alerts
 - Runs in the notification area: closing the window keeps monitoring; the tray icon shows the worst active alert
 - Optional start with Windows (`--minimized`, tray only), CSV logging and adjustable thresholds in Settings
   (stored in `%LocalAppData%\ReTweak\settings.json`)
 
-Monitoring is read-only. The one thing ReTweak writes to the GPU is fan speed, and only
-when you pick Fixed or Curve:
+Monitoring is read-only. The one thing ReTweak writes to the GPU is fan speed: always in Fixed
+and Curve, and in Auto only when the safety net steps in (hotspot or memory too hot; you can turn
+it off in Settings). All of these need ReTweak to run as administrator:
 
 - It uses NVML's documented fan calls and needs administrator rights (the dashboard offers
   *Restart as administrator*). Start with Windows runs unelevated, so the fans stay on Auto there.

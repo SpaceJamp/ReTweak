@@ -108,7 +108,19 @@ anyway; disassembling HWMonitor 1.68 (x64, static only) shows how it finds tempe
 |---|---|
 | GPU, Hot Spot, Memory Junction (ids 1-3) | NVAPI `0x0BC8163D` (undocumented, v2, 0xAB0 bytes) describes the 32 `ThermalGetSensors` slots: entry *i* at `0x28 + i*0x54`, word 0 = class, word 1 = **type** (0 core, 1 hotspot, 3 memory). HWMonitor picks the slot by type instead of by index |
 | `[VRM #1]` ... `[TMP #8]` (ids 20-28) | The ASUS chip's eight board sensors at register `0x60` (address `0x2B`, the same reads ReTweak does), only on ASUS subsystems `89DE`, `89E3`, `89EA`, `89EC`, `8A61` |
-| **Hot Spot** (id 29), Channel #2-#4 (ids 30-32) | **GPU register BAR0 + `0xAD0A90`** (`+0x94`, `+0x98`, `+0x9C`) read through HWMonitor's kernel driver. Bit 30 = valid, low 16 bits = 1/256 °C |
+| **Hot Spot** (id 29), Channel #2-#4 (ids 30-32) | **GPU registers BAR0 + `0xAD0A90`** (`+0x94`, `+0x98`, `+0x9C`) read through HWMonitor's kernel driver. Bit 30 = valid, low 16 bits = 1/256 °C |
+
+**Which channel is the hotspot.** The block holds six channels (`0xAD0A90`-`0xAD0AA4`). Logged at
+10 Hz on the RTX 5080 (2,889 reads over three sessions, `research/hotspot_probe.py`), channel #5
+(`0xAD0AA0`) equalled the maximum of #1-#4 in every read; #6 was never the highest. So #1-#4 are
+individual sensors and #5 is their maximum, the hotspot. HWMonitor labels #1 "Hot Spot", which is
+right only while #1 is the hottest sensor: in one session #4 was hotter and #1 read 0.7-1.9 °C
+below #5 (mean 1.3). HWiNFO 8.54 showed 37.8 °C against HWMonitor's 37.6 °C at about the same
+time. ReTweak uses #5 (falling back to the hottest of #1-#4 if #5 isn't valid).
+
+**Sampling.** The registers change at least every 100 ms and are jumpy at light load (~4 °C
+within a second, ~1.4 °C between 0.1 s reads). ReTweak reads them at 10 Hz, shows the 1 s average
+and uses the 1 s peak for failsafes.
 
 On the RTX 5080 Astral (driver 617.42) the type-1 NVAPI slot is empty (`0xFF00`), so only the
 register path gives a hotspot. It reads about 4 °C above the core at light load

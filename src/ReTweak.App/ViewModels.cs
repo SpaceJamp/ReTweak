@@ -89,6 +89,11 @@ public sealed partial class MainViewModel : Observable, IDisposable
 
     private string _memTemp = "-", _memSource = "", _hotspot = "-";
     public string Hotspot { get => _hotspot; private set => Set(ref _hotspot, value); }
+    private string _hotspotChannels = "", _hotspotPeak = "";
+    /// <summary>"1 s average · peak 46.8 °C": the shown value is averaged, safety decisions use the peak.</summary>
+    public string HotspotPeak { get => _hotspotPeak; private set => Set(ref _hotspotPeak, value); }
+    /// <summary>The four GPU thermal sensors the hotspot is the maximum of.</summary>
+    public string HotspotChannels { get => _hotspotChannels; private set => Set(ref _hotspotChannels, value); }
     /// <summary>Where the hotspot comes from, or what the user can do to get one.</summary>
     public string HotspotNote { get; }
     /// <summary>Show the "Get PawnIO" link: an RTX 50 card without the optional driver.</summary>
@@ -146,7 +151,23 @@ public sealed partial class MainViewModel : Observable, IDisposable
             PollGpu(); // react now rather than in up to a second
         }
     }
-    /// <summary>Last core temperature the fans were driven from, for the curve chart.</summary>
+    private string _fanChartLabel = "";
+    /// <summary>Caption over the fan chart: what the x axis is.</summary>
+    public string FanChartLabel { get => _fanChartLabel; private set => Set(ref _fanChartLabel, value); }
+
+    /// <summary>Saves a new curve (from dragging points or a preset); null if saved, else why not.</summary>
+    public string? SetFanCurve(IReadOnlyList<FanPoint> curve, bool switchToCurve)
+    {
+        var fans = _settings.Fans with { Curve = curve, Mode = switchToCurve ? FanMode.Curve : _settings.Fans.Mode };
+        if (fans.Validate() is { } problem) return problem;
+        var updated = _settings with { Fans = fans };
+        try { updated.Save(); } catch (Exception) { /* still apply it for this session */ }
+        Apply(updated);
+        PollGpu(); // react now rather than in up to a second
+        return null;
+    }
+
+    /// <summary>Last temperature the fans were driven from (the curve's input), for the curve chart.</summary>
     public double? FanTempC { get; private set; }
     /// <summary>Raised on the UI thread when the fan status or curve changes.</summary>
     public event Action? FanChanged;
@@ -225,6 +246,9 @@ public sealed partial class MainViewModel : Observable, IDisposable
         {
             _fan.Options = settings.Fans;
             Set(ref _fanModeIndex, (int)settings.Fans.Mode, nameof(FanModeIndex));
+            FanChartLabel = settings.Fans.Mode == FanMode.Auto
+                ? "Fan control · the dot is now"
+                : "Fan curve · the dot is now";
         }
         if (_sampler is null) return;
         bool logging = _sampler.LogPath is not null;
@@ -247,6 +271,10 @@ public sealed partial class MainViewModel : Observable, IDisposable
         Temperature = s.CoreTempC is double t ? $"{t:F1} °C" : "-";
         MemoryTemperature = s.MemoryTempC is double mt ? $"{mt:F1} °C" : "-";
         Hotspot = s.HotspotC is double hs ? $"{hs:F1} °C" : "-";
+        HotspotPeak = s.HotspotMaxC is double hm ? $"1 s average · peak {hm:F1} °C" : "";
+        HotspotChannels = s.ThermalChannels is { } ch
+            ? "Sensors " + string.Join("  ", ch.Take(4).Select((c, i) => $"#{i + 1} {(c is double v ? $"{v:F1}" : "-")}"))
+            : "";
         MemoryTempSource = s.MemoryTempSource is { } src ? $"from {src}" : "";
         if (s.BoardTemps is { } board)
         {
@@ -268,18 +296,21 @@ public sealed partial class MainViewModel : Observable, IDisposable
             Vram = $"{used / 1073741824.0:F1} / {total / 1073741824.0:F0} GB";
             VramPercent = (double)used / total * 100;
         }
-        UpdateFans(s.CoreTempC);
+        UpdateFans(s);
     }
 
-    private void UpdateFans(double? coreTempC)
+    private void UpdateFans(GpuSnapshot s)
     {
         if (_fan is null) return;
         FanStatus st;
-        try { st = _fan.Tick(coreTempC); }
+        try { st = _fan.Tick(new FanTemps(s.CoreTempC, s.HotspotC, s.MemoryTempC, s.HotspotMaxC)); }
         catch (Exception ex) { st = new(_fan.Options.Mode, null, $"Fan control error: {ex.Message}", AlertSeverity.Warning); }
-        FanTempC = coreTempC;
-        FanStatus = st.Text;
-        FanNeedsAdmin = st.NeedsAdmin && !Elevation.IsAdmin;
+        FanTempC = st.SourceTempC ?? s.CoreTempC;
+        // Unelevated, Auto is simply the driver's curve; mention the safety net quietly instead of
+        // nagging with the restart button (that's for Fixed and Curve, which can't work at all).
+        bool autoUnelevated = st.Mode == FanMode.Auto && !Elevation.IsAdmin;
+        FanStatus = autoUnelevated && _fan.Options.AutoAssist ? "Automatic (driver). The safety net works when ReTweak runs as administrator." : st.Text;
+        FanNeedsAdmin = st.NeedsAdmin && !autoUnelevated && !Elevation.IsAdmin;
         FanStatusBrush = st.Severity > AlertSeverity.None ? Theme.For(st.Severity) : st.Mode == FanMode.Auto ? Theme.Muted : Theme.Ok;
         FanChanged?.Invoke();
     }

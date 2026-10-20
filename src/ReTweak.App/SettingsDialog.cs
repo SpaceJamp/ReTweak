@@ -78,19 +78,62 @@ internal static class SettingsDialog
 
         // Fan control
         var f = current.Fans;
-        var fanMode = new ComboBox { Header = "Fan mode", ItemsSource = new[] { "Auto (driver)", "Fixed speed", "Curve" }, SelectedIndex = (int)f.Mode, MinWidth = 200 };
+        var fanMode = new ComboBox
+        {
+            Header = "Fan mode", MinWidth = 220, SelectedIndex = (int)f.Mode,
+            ItemsSource = new[] { "Auto (driver, with safety net)", "Fixed speed", "Curve" },
+        };
+        var fanSource = new ComboBox
+        {
+            Header = "Curve follows", MinWidth = 220, SelectedIndex = (int)f.Source,
+            ItemsSource = new[] { "Core temperature", "Hotspot (needs PawnIO; else core)", "Memory temperature", "Hottest of the three" },
+        };
         var fanFixed = Num("Fixed fan speed (%)", f.FixedPercent);
         var fanHyst = Num("Curve hysteresis (°C)", f.HysteresisC);
-        var fanFailsafe = Num("Full speed at or above (°C)", f.FailsafeTempC);
-        foreach (var n in new[] { fanFixed, fanFailsafe }) n.SmallChange = 1;
-        fanHyst.SmallChange = 0.5;
+        var rampUp = Num("Speed up at most (%/s, 0 = instant)", f.RampUpPerSecond);
+        var rampDown = Num("Slow down at most (%/s, 0 = instant)", f.RampDownPerSecond);
+        var smoothing = Num("Average temperature over (s)", f.SmoothingSeconds);
+        var zeroRpm = new ToggleSwitch { Header = "Curve: let the driver stop the fans (0 RPM) when cool", IsOn = f.ZeroRpm };
+        var zeroBelow = Num("Zero RPM below (°C)", f.ZeroRpmBelowC);
+        var failCore = Num("Full speed at core (°C)", f.FailsafeTempC);
+        var failHot = Num("Full speed at hotspot (°C)", f.FailsafeHotspotC);
+        var failMem = Num("Full speed at memory (°C)", f.FailsafeMemoryC);
+        var assist = new ToggleSwitch { Header = "Auto: step in when the driver's curve isn't enough", IsOn = f.AutoAssist };
+        var assistHot = Num("Step in at hotspot (°C)", f.AssistHotspotC);
+        var assistMem = Num("Step in at memory (°C)", f.AssistMemoryC);
+        var assistGap = Num("Step in at hotspot above core (°C)", f.AssistGapC);
+        var assistBoost = Num("Boost over the driver's speed (%)", f.AssistBoostPercent);
+        var assistHold = Num("Hand back after cool for (s)", f.AssistHoldSeconds);
+        var assistMargin = Num("Cool means below by (°C)", f.AssistReleaseMarginC);
+        foreach (var n in new[] { fanFixed, rampUp, rampDown, zeroBelow, failCore, failHot, failMem, assistHot, assistMem, assistGap, assistBoost, assistHold, assistMargin })
+            n.SmallChange = 1;
+        foreach (var n in new[] { fanHyst, smoothing }) n.SmallChange = 0.5;
+
+        Grid Pairs(params (FrameworkElement, FrameworkElement?)[] rows)
+        {
+            var g = new Grid { ColumnSpacing = 12, RowSpacing = 8 };
+            g.ColumnDefinitions.Add(new ColumnDefinition());
+            g.ColumnDefinitions.Add(new ColumnDefinition());
+            for (int r = 0; r < rows.Length; r++)
+            {
+                g.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+                Grid.SetRow(rows[r].Item1, r);
+                g.Children.Add(rows[r].Item1);
+                if (rows[r].Item2 is { } b) { Grid.SetRow(b, r); Grid.SetColumn(b, 1); g.Children.Add(b); }
+            }
+            return g;
+        }
 
         const int CurvePoints = 5;
-        var curveGrid = new Grid { ColumnSpacing = 12, RowSpacing = 8 };
-        curveGrid.ColumnDefinitions.Add(new ColumnDefinition());
-        curveGrid.ColumnDefinitions.Add(new ColumnDefinition());
         var curveTemps = new NumberBox[CurvePoints];
         var curvePcts = new NumberBox[CurvePoints];
+        for (int i = 0; i < CurvePoints; i++)
+        {
+            curveTemps[i] = Num($"Point {i + 1} · °C", 0);
+            curvePcts[i] = Num($"Point {i + 1} · fan %", 0);
+            curveTemps[i].SmallChange = curvePcts[i].SmallChange = 1;
+        }
+        var curveGrid = Pairs(Enumerable.Range(0, CurvePoints).Select(i => ((FrameworkElement)curveTemps[i], (FrameworkElement?)curvePcts[i])).ToArray());
         void FillCurve(IReadOnlyList<FanPoint> pts)
         {
             for (int i = 0; i < CurvePoints; i++)
@@ -100,33 +143,39 @@ internal static class SettingsDialog
                 curvePcts[i].Value = p.Percent;
             }
         }
-        for (int i = 0; i < CurvePoints; i++)
-        {
-            curveGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            curveTemps[i] = Num($"Point {i + 1} · core °C", 0);
-            curvePcts[i] = Num($"Point {i + 1} · fan %", 0);
-            curveTemps[i].SmallChange = curvePcts[i].SmallChange = 1;
-            Grid.SetRow(curveTemps[i], i);
-            Grid.SetRow(curvePcts[i], i);
-            Grid.SetColumn(curvePcts[i], 1);
-            curveGrid.Children.Add(curveTemps[i]);
-            curveGrid.Children.Add(curvePcts[i]);
-        }
         FillCurve(f.Curve.Count == CurvePoints ? f.Curve : new FanOptions().Curve);
 
-        var fanNote = new TextBlock
+        var presetRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
+        presetRow.Children.Add(new TextBlock { Text = "Load preset:", VerticalAlignment = VerticalAlignment.Center });
+        foreach (var (name, pts) in FanOptions.Presets)
         {
-            Text = "Fixed and Curve write to the card and need ReTweak to run as administrator. " +
-                   "Auto, closing ReTweak or losing the temperature reading hands the fans back to the driver. " +
-                   "Close GPU Tweak III and other fan tools first, or they'll fight over the fans.",
+            var b = new HyperlinkButton { Content = name };
+            b.Click += (_, _) => FillCurve(pts);
+            presetRow.Children.Add(b);
+        }
+
+        TextBlock Caption(string text) => new()
+        {
+            Text = text,
             Style = (Style)Application.Current.Resources["CaptionTextBlockStyle"],
             TextWrapping = TextWrapping.Wrap,
         };
+        var fanNote = Caption("Fixed, Curve and the Auto safety net write to the card and need ReTweak to run as administrator. " +
+                              "Switching to Auto without the safety net, closing ReTweak or losing the temperature reading hands the fans " +
+                              "back to the driver. Close GPU Tweak III and other fan tools first, or they'll fight over the fans.");
+        var assistNote = Caption("The driver's own curve only sees the core. The safety net watches the hotspot and memory too, and " +
+                                 "a hotspot far above the core, a sign of poor cooler contact. Thresholds are starting points, not load-tested.");
         var fanReset = new HyperlinkButton { Content = "Reset fan settings to defaults" };
         fanReset.Click += (_, _) =>
         {
             var d = new FanOptions();
-            fanFixed.Value = d.FixedPercent; fanHyst.Value = d.HysteresisC; fanFailsafe.Value = d.FailsafeTempC;
+            fanSource.SelectedIndex = (int)d.Source;
+            fanFixed.Value = d.FixedPercent; fanHyst.Value = d.HysteresisC;
+            rampUp.Value = d.RampUpPerSecond; rampDown.Value = d.RampDownPerSecond; smoothing.Value = d.SmoothingSeconds;
+            zeroRpm.IsOn = d.ZeroRpm; zeroBelow.Value = d.ZeroRpmBelowC;
+            failCore.Value = d.FailsafeTempC; failHot.Value = d.FailsafeHotspotC; failMem.Value = d.FailsafeMemoryC;
+            assist.IsOn = d.AutoAssist; assistHot.Value = d.AssistHotspotC; assistMem.Value = d.AssistMemoryC; assistGap.Value = d.AssistGapC;
+            assistBoost.Value = d.AssistBoostPercent; assistHold.Value = d.AssistHoldSeconds; assistMargin.Value = d.AssistReleaseMarginC;
             FillCurve(d.Curve);
         };
 
@@ -144,7 +193,11 @@ internal static class SettingsDialog
             error, Section("General"), autostart, tray, toasts,
             Section("Logging"), log, logFolder, logNote,
             Section("Alert thresholds"), grid, reset,
-            Section("Fan control"), fanNote, fanMode, fanFixed, curveGrid, fanHyst, fanFailsafe, fanReset,
+            Section("Fan control"), fanNote, Pairs((fanMode, fanSource)), fanFixed,
+            Section("Curve"), presetRow, curveGrid, Pairs((fanHyst, smoothing), (rampUp, rampDown)), zeroRpm, zeroBelow,
+            Section("Failsafes (all modes that write)"), Pairs((failCore, failHot), (failMem, null)),
+            Section("Auto safety net"), assistNote, assist, Pairs((assistHot, assistMem), (assistGap, assistBoost), (assistHold, assistMargin)),
+            fanReset,
         }) panel.Children.Add(e);
 
         var dialog = new ContentDialog
@@ -182,15 +235,34 @@ internal static class SettingsDialog
             };
             problem ??= AppSettings.Validate(alerts);
 
-            var fanBoxes = curveTemps.Concat(curvePcts).Append(fanFixed).Append(fanHyst).Append(fanFailsafe);
+            var fanBoxes = curveTemps.Concat(curvePcts).Concat(new[]
+            {
+                fanFixed, fanHyst, rampUp, rampDown, smoothing, zeroBelow, failCore, failHot, failMem,
+                assistHot, assistMem, assistGap, assistBoost, assistHold, assistMargin,
+            });
             if (problem is null && fanBoxes.Any(b => double.IsNaN(b.Value))) problem = "Every fan setting needs a number.";
             var fans = current.Fans with
             {
                 Mode = (FanMode)Math.Max(0, fanMode.SelectedIndex),
+                Source = (FanSource)Math.Max(0, fanSource.SelectedIndex),
                 FixedPercent = (int)Math.Round(fanFixed.Value),
-                HysteresisC = fanHyst.Value,
-                FailsafeTempC = fanFailsafe.Value,
                 Curve = Enumerable.Range(0, CurvePoints).Select(i => new FanPoint(curveTemps[i].Value, (int)Math.Round(curvePcts[i].Value))).ToList(),
+                HysteresisC = fanHyst.Value,
+                RampUpPerSecond = rampUp.Value,
+                RampDownPerSecond = rampDown.Value,
+                SmoothingSeconds = smoothing.Value,
+                ZeroRpm = zeroRpm.IsOn,
+                ZeroRpmBelowC = zeroBelow.Value,
+                FailsafeTempC = failCore.Value,
+                FailsafeHotspotC = failHot.Value,
+                FailsafeMemoryC = failMem.Value,
+                AutoAssist = assist.IsOn,
+                AssistHotspotC = assistHot.Value,
+                AssistMemoryC = assistMem.Value,
+                AssistGapC = assistGap.Value,
+                AssistBoostPercent = (int)Math.Round(assistBoost.Value),
+                AssistHoldSeconds = assistHold.Value,
+                AssistReleaseMarginC = assistMargin.Value,
             };
             problem ??= fans.Validate();
             if (problem is null && log.IsOn && string.IsNullOrWhiteSpace(logFolder.Text)) problem = "Choose a log folder or turn logging off.";

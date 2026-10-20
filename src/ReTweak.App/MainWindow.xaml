@@ -112,8 +112,14 @@
                         <StackPanel>
                             <TextBlock Text="GPU hotspot" Style="{StaticResource TileLabel}" />
                             <TextBlock Text="{x:Bind ViewModel.Hotspot, Mode=OneWay}" Style="{StaticResource TileValue}" />
+                            <TextBlock Text="{x:Bind ViewModel.HotspotPeak, Mode=OneWay}" TextWrapping="Wrap"
+                                       ToolTipService.ToolTip="Read 10 times a second. The value is the average of the last second; failsafes and the fan safety net use the peak."
+                                       Style="{StaticResource CaptionTextBlockStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                             <TextBlock Text="{x:Bind ViewModel.HotspotNote}" TextWrapping="Wrap"
                                        Style="{StaticResource CaptionTextBlockStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                            <TextBlock Text="{x:Bind ViewModel.HotspotChannels, Mode=OneWay}" TextWrapping="Wrap"
+                                       ToolTipService.ToolTip="The GPU's four thermal sensors; the hotspot is the hottest of them (register #5). HWMonitor's Hot Spot is sensor #1 only."
+                                       Style="{StaticResource CaptionTextBlockStyle}" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
                             <HyperlinkButton Content="Get PawnIO" Padding="0" Margin="0,2,0,0" NavigateUri="https://pawnio.eu/"
                                              Visibility="{x:Bind ViewModel.OfferPawnIo}" />
                         </StackPanel>
@@ -160,18 +166,27 @@
                             <Button Content="Restart as administrator" Click="RestartElevated_Click"
                                     Visibility="{x:Bind ViewModel.FanNeedsAdmin, Mode=OneWay}"
                                     Style="{StaticResource AccentButtonStyle}" />
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <TextBlock Text="Presets" VerticalAlignment="Center" Style="{StaticResource CaptionTextBlockStyle}"
+                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                <Button Content="Quiet" Tag="Quiet" Click="FanPreset_Click" Padding="10,3" />
+                                <Button Content="Balanced" Tag="Balanced" Click="FanPreset_Click" Padding="10,3" />
+                                <Button Content="Performance" Tag="Performance" Click="FanPreset_Click" Padding="10,3" />
+                            </StackPanel>
                             <TextBlock Style="{StaticResource CaptionTextBlockStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                        TextWrapping="Wrap" MaxWidth="320"
-                                       Text="Edit the curve, fixed speed and failsafe in Settings. Auto, closing ReTweak or a lost temperature reading hands the fans back to the driver." />
+                                       Text="In Curve mode, drag the points on the chart. More options (input, ramping, 0 RPM, failsafes, the Auto safety net) are in Settings." />
                         </StackPanel>
 
                         <StackPanel Grid.Column="1" Spacing="6">
                             <TextBlock Style="{StaticResource TileLabel}">
-                                <Run Text="Fan curve · core °C → fan % (dot: now)" />
+                                <Run Text="{x:Bind ViewModel.FanChartLabel, Mode=OneWay}" />
                                 <Run Text="{x:Bind ViewModel.FanSpeedRange}" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
                             </TextBlock>
-                            <Canvas x:Name="FanChart" Height="140" SizeChanged="Chart_SizeChanged"
-                                    Background="{ThemeResource ControlFillColorTransparentBrush}" />
+                            <Canvas x:Name="FanChart" Height="230" SizeChanged="Chart_SizeChanged"
+                                    Background="{ThemeResource ControlFillColorTransparentBrush}"
+                                    PointerPressed="FanChart_PointerPressed" PointerMoved="FanChart_PointerMoved"
+                                    PointerReleased="FanChart_PointerReleased" PointerCaptureLost="FanChart_PointerCaptureLost" />
                         </StackPanel>
                     </Grid>
                 </Border>
