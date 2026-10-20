@@ -277,9 +277,18 @@ public sealed class FanController : IDisposable
     /// <summary>Airflow the card needs per power level, learned in Auto; persist it with <see cref="AirflowModel.Corrections"/>.</summary>
     public AirflowModel Airflow { get; } = new();
     public string ActivityReason => _activity.Reason;
-    private string? _blocked;        // write failed; don't retry until the options change
+    private string? _blocked;        // write failed; retried after BlockedRetry unless it was a permission error
     private bool _blockedByPermission;
+    private TimeSpan _blockedAt;
     private bool _disposed;
+    // The UI timer ticks; ProcessExit / UnhandledException dispose from other threads. Without this, a tick
+    // in the middle of a write could set the fans again just after Dispose handed them back.
+    private readonly Lock _gate = new();
+    /// <summary>
+    /// A failed write that wasn't about permissions (a driver reset after a TDR or an update) is tried again
+    /// after this long, instead of leaving ReTweak off for the rest of the session.
+    /// </summary>
+    public static readonly TimeSpan BlockedRetry = TimeSpan.FromSeconds(30);
 
     public FanStatus Status { get; private set; } = new(FanMode.Driver, null, "Automatic (driver)");
 
@@ -306,20 +315,45 @@ public sealed class FanController : IDisposable
         get => _options;
         set
         {
-            var previous = _options;
-            _options = value;
-            _blocked = null; // new settings: allow another attempt
-            _blockedByPermission = false;
-            _overrides = 0;
-            _recentOverrides.Clear();
-            if (value.Source != previous.Source) _smoothed = null; // a different input: don't average across it
-            if (value.Mode != FanMode.Driver) { _assisting = false; _coolSince = null; }
-            if (value.Mode != FanMode.Smart || value.SmartPriority != previous.SmartPriority) _smartRunning = false;
+            lock (_gate) SetOptions(value);
         }
+    }
+
+    private void SetOptions(FanOptions value)
+    {
+        var previous = _options;
+        _options = value;
+        _blocked = null; // new settings: allow another attempt
+        _blockedByPermission = false;
+        _overrides = 0;
+        _recentOverrides.Clear();
+        if (value.Source != previous.Source) _smoothed = null; // a different input: don't average across it
+        if (value.Mode != FanMode.Driver) { _assisting = false; _coolSince = null; }
+        if (value.Mode != FanMode.Smart || value.SmartPriority != previous.SmartPriority) _smartRunning = false;
     }
 
     /// <summary>Runs one control step; with diagnostics on, logs the inputs, internals and the decision.</summary>
     public FanStatus Tick(FanTemps temps)
+    {
+        lock (_gate) return TickLocked(temps);
+    }
+
+    /// <summary>
+    /// Hands the fans back to the driver now (its own curve keeps the card safe). For when a tick failed:
+    /// a manual speed must not stay stuck while nothing is controlling it.
+    /// </summary>
+    public void ReleaseToDriver()
+    {
+        lock (_gate)
+        {
+            if (_disposed) return;
+            _smartRunning = false;
+            _assisting = false;
+            Release();
+        }
+    }
+
+    private FanStatus TickLocked(FanTemps temps)
     {
         var before = Status;
         _lastSmart = null;
@@ -359,6 +393,11 @@ public sealed class FanController : IDisposable
         {
             Release();
             return Status = new(FanMode.Driver, null, "Automatic (driver)");
+        }
+        if (_blocked is not null && !_blockedByPermission && now - _blockedAt >= BlockedRetry)
+        {
+            Diag.Info(DiagCategory.Fan, "retrying fan control after a failed write", new { error = _blocked });
+            _blocked = null;
         }
         if (_blocked is not null)
             return Status = o.Mode == FanMode.Driver
@@ -468,7 +507,10 @@ public sealed class FanController : IDisposable
         double error = steer.Error;
 
         // 3. Load now, and where a rising trend will be in a few seconds.
-        double power = Math.Clamp(t.PowerFraction ?? 0.35, 0, 1.2);
+        // Unknown power (no reading, or a 0 W limit giving NaN/∞) counts as moderate load. A NaN here would
+        // stick in the look-ahead and integral for good, and be saved into the learned airflow table.
+        bool powerKnown = t.PowerFraction is double pf && double.IsFinite(pf);
+        double power = powerKnown ? Math.Clamp(t.PowerFraction!.Value, 0, 1.2) : 0.35;
         _powerTrend.Enqueue(power);
         while (_powerTrend.Count > 5) _powerTrend.Dequeue();
         double slope = _powerTrend.Count >= 2 ? (_powerTrend.Last() - _powerTrend.First()) / (_powerTrend.Count - 1) : 0;
@@ -532,7 +574,7 @@ public sealed class FanController : IDisposable
         //    card at this power. After 20 s on target, move it into the airflow table a little at a time.
         // "On target" allows for the hotspot's normal jitter: a tight dead band alone would never stay put for 20 s.
         _stableTicks = Math.Abs(error) <= Math.Max(tune.DeadbandC, 1.5) && !pinnedHigh && !pinnedLow && failsafe is null
-                       && t.PowerFraction is not null && Math.Abs(slope) < 0.01 ? _stableTicks + 1 : 0;
+                       && powerKnown && Math.Abs(slope) < 0.01 ? _stableTicks + 1 : 0;
         double learned = 0;
         if (_stableTicks >= 20 && Math.Abs(_integral) > 0.5)
         {
@@ -653,6 +695,7 @@ public sealed class FanController : IDisposable
         {
             _blocked = error;
             _blockedByPermission = error.Contains("administrator");
+            _blockedAt = _clock();
             ResetHeld();
             _assisting = false;
             _restore(); // a multi-fan write can fail halfway; undo the fans that did change
@@ -712,8 +755,11 @@ public sealed class FanController : IDisposable
 
     public void Dispose()
     {
-        if (_disposed) return;
-        _disposed = true;
-        Release();
+        lock (_gate)
+        {
+            if (_disposed) return;
+            _disposed = true;
+            Release();
+        }
     }
 }
