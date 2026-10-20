@@ -10,7 +10,7 @@ going wrong.
 - **Per-pin voltage and current** on ASUS cards with Power Detector+ (e.g. ROG Astral), read directly from the card's monitor chip; see [docs/power-detector.md](docs/power-detector.md)
 - **Temperatures**: precise core (0.01 °C) and memory on RTX 50; on ASUS cards, memory comes from the
   board sensors GPU Tweak III uses, plus 8 board sensors (VRM, core, memory and more)
-- Early-warning alerts: pin over-current, low/high voltage, pin-to-pin voltage spread, current imbalance, fast voltage drops or current ramps, frozen sensor, high core or memory temperature
+- **Early-warning alerts**: pin over-current, low/high voltage, pin-to-pin voltage spread, current imbalance, fast voltage drops or current ramps, frozen sensor, high core or memory temperature
 - **Fan control**: Auto (driver), a fixed speed, or a 5-point temperature curve with hysteresis
   and a full-speed failsafe; edit it in Settings, switch modes on the dashboard
 - Native Windows notifications for alerts
