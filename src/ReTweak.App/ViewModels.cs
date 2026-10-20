@@ -86,7 +86,14 @@ public sealed partial class MainViewModel : Observable, IDisposable
     /// <summary>Raised on the UI thread when the worst alert or the connector reading changes.</summary>
     public event Action? StatusChanged;
 
-    private string _memTemp = "-", _memSource = "";
+    private string _memTemp = "-", _memSource = "", _hotspot = "-";
+    public string Hotspot { get => _hotspot; private set => Set(ref _hotspot, value); }
+    /// <summary>Where the hotspot comes from, or what the user can do to get one.</summary>
+    public string HotspotNote { get; }
+    /// <summary>Show the "Get PawnIO" link: an RTX 50 card without the optional driver.</summary>
+    public bool OfferPawnIo { get; }
+    /// <summary>Tooltip on the hotspot tile: why a driver is involved and what it can do.</summary>
+    public string HotspotHelp { get; }
     public bool HasMemoryTemp { get; }
     public string Temperature { get => _temp; private set => Set(ref _temp, value); }
     public string MemoryTemperature { get => _memTemp; private set => Set(ref _memTemp, value); }
@@ -134,6 +141,21 @@ public sealed partial class MainViewModel : Observable, IDisposable
                    + (monitor.HasConnectorSensor(_gpu) ? "  ·  ASUS Power Detector found" : "");
 
         HasMemoryTemp = monitor.HasMemoryTemperature(_gpu);
+        var hotspotState = monitor.HotspotState(_gpu);
+        OfferPawnIo = hotspotState == HotspotAvailability.PawnIoMissing;
+        HotspotNote = hotspotState switch
+        {
+            HotspotAvailability.Available => "from the GPU via PawnIO",
+            HotspotAvailability.PawnIoMissing => "Needs the optional PawnIO driver",
+            HotspotAvailability.NeedsAdmin => "Run ReTweak as administrator to read it",
+            _ => monitor.HotspotNote(_gpu),
+        };
+        HotspotHelp = hotspotState == HotspotAvailability.NotApplicable
+            ? "This card's driver doesn't report a hotspot."
+            : "RTX 50 drivers no longer report the hotspot. ReTweak can read it from the GPU's temperature " +
+              "registers through PawnIO, an open-source, signed driver also used by LibreHardwareMonitor and " +
+              "FanControl. ReTweak only loads PawnIO's signed NVIDIA module, which can only read those registers. " +
+              "PawnIO is optional: everything else in ReTweak works without it. It needs ReTweak to run as administrator.";
 
         _alerts = new AlertEngine(settings.Alerts);
         // Raised on the sampler thread or the UI thread; always marshal so handlers run on the UI thread.
@@ -181,6 +203,7 @@ public sealed partial class MainViewModel : Observable, IDisposable
 
         Temperature = s.CoreTempC is double t ? $"{t:F1} °C" : "-";
         MemoryTemperature = s.MemoryTempC is double mt ? $"{mt:F1} °C" : "-";
+        Hotspot = s.HotspotC is double hs ? $"{hs:F1} °C" : "-";
         MemoryTempSource = s.MemoryTempSource is { } src ? $"from {src}" : "";
         if (s.BoardTemps is { } board)
         {

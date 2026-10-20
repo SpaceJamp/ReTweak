@@ -51,6 +51,7 @@ static class Simulate
 
         StaleCheck();
         TempCheck();
+        HotspotDecodeCheck();
 
         Console.WriteLine(_failures == 0 ? "\nAll scenarios passed." : $"\n{_failures} scenario(s) FAILED.");
         return _failures;
@@ -181,6 +182,27 @@ static class Simulate
         for (t = 0; t <= 10; t++) quiet.ProcessGpu(Snap(60, t == 5 ? 101 : 70));
         if (raised != 0) _failures++;
         Console.WriteLine($"  {(raised == 0 ? "PASS" : "FAIL")}: {raised} alert(s)");
+    }
+
+    private static void HotspotDecodeCheck()
+    {
+        // Raw values in the format of GPU register 0xAD0A90 (bit 30 = valid, low 16 bits = 1/256 °C).
+        var cases = new (long Raw, double? Expect, string What)[]
+        {
+            (0x40002600, 38.0, "valid 38.00 °C"),
+            (0x400025CD, 37.8, "valid 37.80 °C"),
+            (0x00002600, null, "valid bit clear"),
+            (0x4000FF00, null, "255 °C: no sensor"),
+            (0x40000000, null, "0 °C: implausible"),
+        };
+        Console.WriteLine("\n== Hotspot register decoding");
+        foreach (var (raw, expect, what) in cases)
+        {
+            double? got = NvidiaHotspot.Decode(raw);
+            bool pass = expect is null ? got is null : got is double g && Math.Abs(g - expect.Value) < 0.01;
+            if (!pass) _failures++;
+            Console.WriteLine($"  {(pass ? "PASS" : "FAIL")}: 0x{raw:X8} ({what}) -> {got?.ToString("F2") ?? "none"}");
+        }
     }
 
     private static ConnectorReading Pins(Func<int, double> v, Func<int, double> a) =>

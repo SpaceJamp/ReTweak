@@ -8,4 +8,9 @@
     <SupportedOSPlatformVersion>10.0</SupportedOSPlatformVersion>
   </PropertyGroup>
 
+  <ItemGroup>
+    <!-- Signed PawnIO module (LGPL-2.1); see PawnIo/README.md -->
+    <EmbeddedResource Include="PawnIo\Nvidia.bin" LogicalName="ReTweak.Core.PawnIo.Nvidia.bin" />
+  </ItemGroup>
+
 </Project>

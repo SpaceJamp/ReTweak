@@ -43,7 +43,10 @@ do
     {
         var s = monitor.Sample(gpu.Index);
         Console.WriteLine($"[{gpu.Index}] {gpu.Name}  (bus {gpu.PciBus}, subsys {gpu.SubVendorId:X4}:{gpu.SubDeviceId:X4})");
-        Console.WriteLine($"    core {s.CoreTempC:F2}°C" + (s.MemoryTempC is double mt ? $"  memory {mt:F1}°C ({s.MemoryTempSource})" : "") +
+        Console.WriteLine($"    core {s.CoreTempC:F2}°C" +
+                          (s.HotspotC is double hs ? $"  hotspot {hs:F1}°C" : $"  hotspot - ({monitor.HotspotNote(gpu.Index)}" +
+                                                         (monitor.HotspotState(gpu.Index) == HotspotAvailability.PawnIoMissing ? "; optional, see https://pawnio.eu/" : "") + ")") +
+                          (s.MemoryTempC is double mt ? $"  memory {mt:F1}°C ({s.MemoryTempSource})" : "") +
                           $"  core clock {s.CoreClockMhz} MHz  mem clock {s.MemoryClockMhz} MHz  load {s.GpuUtilization}%");
         if (s.BoardTemps is { } board)
             Console.WriteLine("    board: " + string.Join("  ", board.Select(b => $"{b.Name} {(b.Celsius is double c ? $"{c:F1}°C" : "-")}")));
@@ -104,7 +107,7 @@ static void RunAlerts(GpuMonitor monitor, string[] args)
         string gpuPath = Path.ChangeExtension(args[logIdx + 1], ".gpu.csv");
         bool fresh = !File.Exists(gpuPath);
         gpuLog = new StreamWriter(gpuPath, append: true) { AutoFlush = true };
-        if (fresh) gpuLog.WriteLine("time,board_w,limit_w,temp_c,core_mhz,mem_mhz,load_pct,mem_temp_c");
+        if (fresh) gpuLog.WriteLine("time,board_w,limit_w,temp_c,core_mhz,mem_mhz,load_pct,mem_temp_c,hotspot_c");
     }
 
     Console.WriteLine($"Monitoring {gpu.Name} connector. Ctrl+C to stop." + (log is null ? "" : " Logging to CSV.") +
@@ -121,7 +124,7 @@ static void RunAlerts(GpuMonitor monitor, string[] args)
         sampler.Alerts.ProcessGpu(s); // core / memory temperature alerts
         gpuLog?.WriteLine(string.Join(",", DateTime.Now.ToString("O"), s.PowerWatts?.ToString("F1", inv), s.PowerLimitWatts?.ToString("F0", inv),
                                       s.CoreTempC?.ToString("F2", inv), s.CoreClockMhz, s.MemoryClockMhz, s.GpuUtilization,
-                                      s.MemoryTempC?.ToString("F0", inv)));
+                                      s.MemoryTempC?.ToString("F0", inv), s.HotspotC?.ToString("F2", inv)));
     }
     gpuLog?.Dispose();
     Console.WriteLine("Stopped.");
