@@ -406,7 +406,7 @@ public sealed class FanController : IDisposable
                 if (_inZeroRpm)
                 {
                     Release();
-                    return Status = new(o.Mode, null, $"Zero RPM · driver has the fans below {o.ZeroRpmBelowC:F0} °C ({sourceName} {smooth:F0} °C)",
+                    return Status = new(o.Mode, null, $"Zero RPM · driver has the fans ({sourceName} {smooth:F0} °C; stops below {o.ZeroRpmBelowC:F0} °C, back on at {o.ZeroRpmBelowC + o.HysteresisC:F0} °C)",
                                         SourceTempC: smooth);
                 }
             }

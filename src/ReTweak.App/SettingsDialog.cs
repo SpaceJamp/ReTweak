@@ -476,6 +476,7 @@ internal static class SettingsDialog
                 }
                 if (problem is not null)
                 {
+                    Diag.Warn(DiagCategory.Settings, "settings not saved", new { problem });
                     error.Message = problem;
                     error.IsOpen = true;
                     args.Cancel = true; // keep the dialog open so the user can fix it
