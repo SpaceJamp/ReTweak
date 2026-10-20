@@ -78,6 +78,40 @@ internal static class SettingsDialog
         diagButtons.Children.Add(saveDiag);
         diagButtons.Children.Add(openDiag);
 
+        // Security check: runs off the UI thread (signature checks, registry, ACLs), results shown inline.
+        var securityResults = new StackPanel { Spacing = 6 };
+        var runSecurity = new Button { Content = "Run security check" };
+        runSecurity.Click += async (_, _) =>
+        {
+            runSecurity.IsEnabled = false;
+            securityResults.Children.Clear();
+            securityResults.Children.Add(new ProgressRing { IsActive = true, Width = 20, Height = 20, HorizontalAlignment = HorizontalAlignment.Left });
+            var findings = await Task.Run(() => Diagnostics.RunSecurityCheck(current));
+            securityResults.Children.Clear();
+            int warn = findings.Count(x => x.Status == CheckStatus.Warn), fail = findings.Count(x => x.Status == CheckStatus.Fail);
+            securityResults.Children.Add(new InfoBar
+            {
+                IsOpen = true, IsClosable = false,
+                Severity = fail > 0 ? InfoBarSeverity.Error : warn > 0 ? InfoBarSeverity.Warning : InfoBarSeverity.Success,
+                Title = fail > 0 ? $"{fail} problem(s) found" : warn > 0 ? $"{warn} thing(s) to look at" : "All clear",
+                Message = $"{findings.Count(x => x.Status == CheckStatus.Pass)} passed, {findings.Count(x => x.Status == CheckStatus.Info)} for information.",
+            });
+            foreach (var x in findings.OrderByDescending(x => x.Status))
+            {
+                var item = new StackPanel { Spacing = 2 };
+                item.Children.Add(new TextBlock
+                {
+                    Text = $"{(x.Status switch { CheckStatus.Fail => "✖", CheckStatus.Warn => "⚠", CheckStatus.Info => "ℹ", _ => "✔" })}  {x.Area} · {x.Title}",
+                    Style = (Style)Application.Current.Resources["BodyStrongTextBlockStyle"], TextWrapping = TextWrapping.Wrap,
+                    Foreground = x.Status switch { CheckStatus.Fail => Theme.Critical, CheckStatus.Warn => Theme.Warn, CheckStatus.Pass => Theme.Ok, _ => Theme.Muted },
+                });
+                if (x.Detail.Length > 0) item.Children.Add(Caption(x.Detail));
+                if (x.Advice.Length > 0) item.Children.Add(Caption("→ " + x.Advice));
+                securityResults.Children.Add(item);
+            }
+            runSecurity.IsEnabled = true;
+        };
+
         var logNote = new TextBlock
         {
             Text = activeLogPath is null ? "Not logging right now." : $"Logging to {activeLogPath}",
@@ -299,6 +333,8 @@ internal static class SettingsDialog
             error, Section("General"), autostart, autostartNote, tray, toasts,
             Section("Logging"), log, logFolder, logNote,
             Section("Diagnostics"), diagLevel, diagNote, diagButtons,
+            Section("Security"), Caption("Checks ReTweak's files, autostart, the PawnIO driver, data folders, known UAC-bypass entries, " +
+                                         "risky drivers and Windows protections. Read-only."), runSecurity, securityResults,
             Section("Alert thresholds"), grid, reset,
             Section("Fan control"), fanNote, Pairs((fanMode, fanSource)), fanFixed,
             Section("Auto"), ceiling, adapt, foreground, activityGrid,

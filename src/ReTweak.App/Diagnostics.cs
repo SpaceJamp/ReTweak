@@ -119,6 +119,9 @@ public static class Diagnostics
         var summary = zip.CreateEntry("environment.json");
         using (var w = new StreamWriter(summary.Open()))
             w.Write(JsonSerializer.Serialize(Describe(monitor, settings), Indented));
+        var security = zip.CreateEntry("security-check.txt");
+        using (var w = new StreamWriter(security.Open()))
+            w.Write(SecurityCheck.Format(RunSecurityCheck(settings)));
 
         foreach (var file in Diag.LogFiles(Folder).Take(Diag.MaxFiles)) AddShared(zip, file, "diagnostics/" + Path.GetFileName(file));
         string settingsFile = Path.Combine(AppSettings.Folder, "settings.json");
@@ -140,6 +143,11 @@ public static class Diagnostics
         }
         catch (IOException) { /* skip a file that vanished */ }
     }
+
+    /// <summary>The security self-audit with this app's folders filled in.</summary>
+    public static IReadOnlyList<SecurityFinding> RunSecurityCheck(AppSettings settings) =>
+        SecurityCheck.Run(dataFolder: AppSettings.Folder, diagnosticsFolder: Folder,
+                          logFolder: settings.LogConnector ? settings.LogFolder : null);
 
     /// <summary>Opens Explorer with the file selected (full path to explorer.exe, no ShellExecute).</summary>
     public static void Reveal(string path) => TrustedPaths.OpenInExplorer(path, select: true);

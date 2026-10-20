@@ -84,6 +84,14 @@ only writes CSV logs and the diagnostics zip inside your profile, keeps its diag
 admin-only folder, starts `explorer.exe` and `schtasks.exe` by full path without ShellExecute, and
 checks that a newly registered logon task really runs ReTweak.
 
+**Security check** (Settings → Security, or `ReTweak.Cli --security-check`, also in the diagnostics
+zip): a read-only audit of ReTweak's program folder (can your normal account change what the
+elevated logon task runs?), the bundled PawnIO module's hash, the logon task, the PawnIO driver's
+signature, ReTweak's data folders, per-user registry entries used by UAC-bypass malware, other
+risky hardware drivers (WinRing0, RTCore64, older ASUS AsIO/IOMap) and fan tools, and Windows
+protections (UAC, Memory Integrity, the vulnerable driver blocklist, Secure Boot). Each item says
+what it found and what to do about it.
+
 ## Layout
 
 | Path | What |
