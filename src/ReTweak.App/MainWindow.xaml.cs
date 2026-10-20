@@ -33,6 +33,7 @@ public sealed partial class MainWindow : Window
         AppWindow.Resize(new SizeInt32((int)(1180 * scale), (int)(900 * scale)));
 
         ViewModel.HistoryChanged += RedrawCharts;
+        ViewModel.FanChanged += DrawFanCurve;
         ViewModel.AlertRaised += Notifications.Show;
         ViewModel.StatusChanged += UpdateTray;
         UpdateTray();
@@ -111,7 +112,78 @@ public sealed partial class MainWindow : Window
         if (saved is not null) ViewModel.Apply(saved);
     }
 
-    private void Chart_SizeChanged(object sender, SizeChangedEventArgs e) => RedrawCharts();
+    private void RestartElevated_Click(object sender, RoutedEventArgs e)
+    {
+        // Only exit once the UAC prompt was accepted; the elevated copy waits for this one to finish.
+        if (Elevation.StartElevatedCopy()) ExitApp();
+    }
+
+    private void Chart_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        RedrawCharts();
+        DrawFanCurve();
+    }
+
+    private const double FanChartMinC = 20, FanChartMaxC = 100;
+
+    private void DrawFanCurve()
+    {
+        if (!AppWindow.IsVisible || !ViewModel.HasFanControl) return;
+        var canvas = FanChart;
+        canvas.Children.Clear();
+        double w = canvas.ActualWidth, h = canvas.ActualHeight - 16; // bottom strip for the °C labels
+        if (w <= 0 || h <= 0) return;
+
+        var o = ViewModel.FanOptions;
+        double X(double c) => Math.Clamp((c - FanChartMinC) / (FanChartMaxC - FanChartMinC), 0, 1) * w;
+        double Y(double pct) => h - Math.Clamp(pct / 100, 0, 1) * h;
+        var grid = (Brush)Application.Current.Resources["ControlStrongStrokeColorDisabledBrush"];
+        var label = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"];
+
+        foreach (double pct in new[] { 0.0, 50, 100 })
+            canvas.Children.Add(new Line { X1 = 0, X2 = w, Y1 = Y(pct), Y2 = Y(pct), Stroke = grid, StrokeThickness = 1 });
+        for (double c = 30; c < FanChartMaxC; c += 20)
+        {
+            var t = new TextBlock { Text = $"{c:F0}°", FontSize = 11, Foreground = label };
+            Canvas.SetLeft(t, X(c) - 8);
+            Canvas.SetTop(t, h + 1);
+            canvas.Children.Add(t);
+        }
+
+        // Failsafe: every manual mode runs at 100% from here.
+        canvas.Children.Add(new Line
+        {
+            X1 = X(o.FailsafeTempC), X2 = X(o.FailsafeTempC), Y1 = 0, Y2 = h,
+            Stroke = Theme.Critical, StrokeThickness = 1, StrokeDashArray = [4, 4],
+        });
+
+        bool active = o.Mode != FanMode.Auto;
+        var line = new Polyline { Stroke = active ? Theme.Info : Theme.Muted, StrokeThickness = 2, StrokeLineJoin = PenLineJoin.Round };
+        for (double c = FanChartMinC; c <= FanChartMaxC; c += 0.5)
+        {
+            double pct = c >= o.FailsafeTempC ? 100 : o.Mode == FanMode.Fixed ? o.FixedPercent : o.CurvePercent(c);
+            line.Points.Add(new Point(X(c), Y(pct)));
+        }
+        canvas.Children.Add(line);
+
+        if (o.Mode == FanMode.Curve)
+            foreach (var p in o.Curve)
+                canvas.Children.Add(Dot(X(p.TempC), Y(p.Percent), 6, Theme.Info));
+
+        if (ViewModel.FanTempC is double now)
+        {
+            double pct = ViewModel.FanAppliedPercent ?? ViewModel.CurrentFanPercent ?? 0;
+            canvas.Children.Add(Dot(X(now), Y(pct), 10, active ? Theme.Ok : Theme.Muted));
+        }
+    }
+
+    private static Ellipse Dot(double x, double y, double size, Brush fill)
+    {
+        var e = new Ellipse { Width = size, Height = size, Fill = fill };
+        Canvas.SetLeft(e, x - size / 2);
+        Canvas.SetTop(e, y - size / 2);
+        return e;
+    }
 
     private void RedrawCharts()
     {

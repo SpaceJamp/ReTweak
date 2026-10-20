@@ -1,4 +1,3 @@
-using System.Security.Principal;
 using Microsoft.UI.Xaml;
 using ReTweak.App.Native;
 using ReTweak.Core;
@@ -18,14 +17,17 @@ public partial class App : Application
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
+        var cmdArgs = Environment.GetCommandLineArgs();
         bool first;
         try { _singleInstance = new Mutex(initiallyOwned: true, InstanceName, out first); }
         catch (UnauthorizedAccessException) { first = false; } // an elevated copy created it
+        // "Restart as administrator": the normal copy started this one and is exiting.
+        if (!first && _singleInstance is not null && cmdArgs.Contains(Elevation.RestartArg)) first = WaitForPreviousInstance(_singleInstance);
 
-        if (IsAdmin)
+        if (Elevation.IsAdmin)
         {
             _elevatedInstance = new Mutex(initiallyOwned: true, ElevatedName, out bool firstElevated);
-            // Run as administrator while a normal copy runs: that copy can't read the hotspot, so take over.
+            // Run as administrator while a normal copy runs: that copy can't read the hotspot or set fans, so take over.
             if (!first && firstElevated && _singleInstance is not null && TrayIcon.AskRunningInstanceToExit())
                 first = WaitForPreviousInstance(_singleInstance);
         }
@@ -38,7 +40,7 @@ public partial class App : Application
         }
 
         // --minimized: started with Windows; stay in the tray until the user opens the window.
-        bool minimized = Environment.GetCommandLineArgs().Contains("--minimized", StringComparer.OrdinalIgnoreCase);
+        bool minimized = cmdArgs.Contains("--minimized", StringComparer.OrdinalIgnoreCase);
         Notifications.Register();
         try
         {
@@ -53,9 +55,7 @@ public partial class App : Application
         if (!minimized) _window.Activate();
     }
 
-    private static bool IsAdmin => new WindowsPrincipal(WindowsIdentity.GetCurrent()).IsInRole(WindowsBuiltInRole.Administrator);
-
-    /// <summary>The normal copy was asked to exit; take its place once it has.</summary>
+    /// <summary>A normal copy is exiting (asked to, or after starting this one); take its place once it has.</summary>
     private static bool WaitForPreviousInstance(Mutex mutex)
     {
         try { return mutex.WaitOne(TimeSpan.FromSeconds(10)); }
