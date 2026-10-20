@@ -7,7 +7,8 @@ namespace ReTweak.App;
 /// <summary>Settings dialog. Returns the saved settings, or null if cancelled.</summary>
 internal static class SettingsDialog
 {
-    public static async Task<AppSettings?> ShowAsync(XamlRoot root, AppSettings current, string? activeLogPath)
+    /// <param name="saveDiagnostics">Writes the diagnostics zip and returns its path.</param>
+    public static async Task<AppSettings?> ShowAsync(XamlRoot root, AppSettings current, string? activeLogPath, Func<string> saveDiagnostics)
     {
         var o = current.Alerts;
 
@@ -35,6 +36,43 @@ internal static class SettingsDialog
         var toasts = new ToggleSwitch { Header = "Windows notifications for warnings and critical alerts", IsOn = current.Toasts };
         var log = new ToggleSwitch { Header = "Log connector readings to CSV", IsOn = current.LogConnector };
         var logFolder = new TextBox { Header = "Log folder", Text = current.LogFolder };
+        // Diagnostic log
+        var diagLevel = new ComboBox
+        {
+            Header = "Diagnostic log", MinWidth = 300,
+            ItemsSource = new[]
+            {
+                "Off",
+                "Events: startup, settings, alerts, errors, fan mode changes",
+                "Detailed: + every sensor reading, fan decision, driver-call timing",
+                "Everything: + raw 10 Hz hotspot reads (large files)",
+            },
+            SelectedIndex = current.DiagnosticsLevel switch { DiagLevel.Off => 0, DiagLevel.Info => 1, DiagLevel.Debug => 2, _ => 3 },
+            IsEnabled = !Diagnostics.ForcedByArg,
+        };
+        var diagNote = new TextBlock
+        {
+            Text = (Diagnostics.ForcedByArg ? "Started with --debug: logging everything for this run. " : "") +
+                   (Diag.CurrentFile is { } f0 ? $"Writing {f0}" : $"Files go to {Diagnostics.Folder} (10 MB each, last 10 kept)."),
+            Style = (Style)Application.Current.Resources["CaptionTextBlockStyle"],
+            TextWrapping = TextWrapping.Wrap,
+        };
+        var saveDiag = new Button { Content = "Save diagnostics to Desktop" };
+        var openDiag = new HyperlinkButton { Content = "Open log folder" };
+        saveDiag.Click += (_, _) =>
+        {
+            try { Diagnostics.Reveal(saveDiagnostics()); }
+            catch (Exception ex) { diagNote.Text = $"Couldn't save diagnostics: {ex.Message}"; }
+        };
+        openDiag.Click += (_, _) =>
+        {
+            Directory.CreateDirectory(Diagnostics.Folder);
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(Diagnostics.Folder) { UseShellExecute = true });
+        };
+        var diagButtons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 12 };
+        diagButtons.Children.Add(saveDiag);
+        diagButtons.Children.Add(openDiag);
+
         var logNote = new TextBlock
         {
             Text = activeLogPath is null ? "Not logging right now." : $"Logging to {activeLogPath}",
@@ -225,6 +263,7 @@ internal static class SettingsDialog
         {
             error, Section("General"), autostart, autostartNote, tray, toasts,
             Section("Logging"), log, logFolder, logNote,
+            Section("Diagnostics"), diagLevel, diagNote, diagButtons,
             Section("Alert thresholds"), grid, reset,
             Section("Fan control"), fanNote, Pairs((fanMode, fanSource)), fanFixed,
             Section("Auto"), Pairs((smartHot, smartCore), (smartPriority, null)), smartIdle,
@@ -315,6 +354,8 @@ internal static class SettingsDialog
                 Toasts = toasts.IsOn,
                 LogConnector = log.IsOn,
                 LogFolder = logFolder.Text.Trim(),
+                DiagnosticsLevel = Diagnostics.ForcedByArg ? current.DiagnosticsLevel
+                    : diagLevel.SelectedIndex switch { 1 => DiagLevel.Info, 2 => DiagLevel.Debug, 3 => DiagLevel.Trace, _ => DiagLevel.Off },
             };
 
             bool wantStart = autostart.IsOn;

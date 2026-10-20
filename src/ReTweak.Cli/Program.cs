@@ -10,6 +10,17 @@ using ReTweak.Core;
 // ReTweak.Cli --fans          fan count, allowed range, current and target speeds
 // ReTweak.Cli --fan <pct>|curve|smart [--duration secs]   drive the fans until Ctrl+C, then hand them back (admin)
 // ReTweak.Cli --fan auto      hand the fans back to the driver (e.g. after a crash) (admin)
+// add --debug to any of these for a full diagnostic log
+
+// --debug: full diagnostic log (JSON lines) to %LocalAppData%\ReTweak\diagnostics, like the app's --debug.
+if (args.Contains("--debug"))
+{
+    string diagFolder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ReTweak", "diagnostics");
+    Diag.Configure(DiagLevel.Trace, diagFolder);
+    Diag.Info(DiagCategory.App, "cli started", new { args, admin = Environment.IsPrivilegedProcess });
+    AppDomain.CurrentDomain.ProcessExit += (_, _) => Diag.Shutdown();
+    Console.WriteLine($"Diagnostic log: {diagFolder}");
+}
 
 int replayIdx = Array.IndexOf(args, "--replay");
 if (replayIdx >= 0 && replayIdx + 1 < args.Length)

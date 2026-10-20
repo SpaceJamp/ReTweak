@@ -78,13 +78,20 @@ internal sealed class HotspotSampler : IDisposable
         while (!token.WaitHandle.WaitOne(Interval))
         {
             try { ReadOnce(); }
-            catch (Exception) { /* a failed read just leaves a gap; the window empties if reads keep failing */ }
+            catch (Exception ex) { Diag.Error(DiagCategory.Hotspot, "hotspot read threw", ex); } // a gap; the window empties if reads keep failing
         }
     }
 
     private void ReadOnce()
     {
-        if (_hotspot.Read() is not { } channels) return;
+        double?[]? channels;
+        using (var timer = Diag.Time("pawnio.thermal_registers"))
+        {
+            channels = _hotspot.Read();
+            if (channels is null) timer.Fail("ioctl failed");
+        }
+        if (channels is null) return;
+        Diag.Trace(DiagCategory.Hotspot, "raw", new { channelsC = channels, hotspotC = NvidiaHotspot.Hotspot(channels) });
         lock (_lock) _window.Add(_clock.Elapsed, channels);
     }
 

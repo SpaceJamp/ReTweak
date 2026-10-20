@@ -111,7 +111,7 @@ public sealed partial class MainWindow : Window
 
     private async void Settings_Click(object sender, RoutedEventArgs e)
     {
-        var saved = await SettingsDialog.ShowAsync(Content.XamlRoot, ViewModel.Settings, ViewModel.LogPath);
+        var saved = await SettingsDialog.ShowAsync(Content.XamlRoot, ViewModel.Settings, ViewModel.LogPath, ViewModel.SaveDiagnostics);
         if (saved is not null) ViewModel.Apply(saved);
     }
 

@@ -242,6 +242,8 @@ public sealed partial class MainViewModel : Observable, IDisposable
     /// <summary>Applies settings live: thresholds from the next frame, logging on/off, toasts.</summary>
     public void Apply(AppSettings settings)
     {
+        Diagnostics.Apply(settings.DiagnosticsLevel);
+        Diag.Info(DiagCategory.Settings, "settings applied", settings);
         _settings = settings;
         Notifications.Enabled = settings.Toasts;
         _alerts.Options = settings.Alerts;
@@ -268,6 +270,9 @@ public sealed partial class MainViewModel : Observable, IDisposable
     }
 
     public string? LogPath => _sampler?.LogPath;
+
+    /// <summary>Zips logs, settings and an environment summary to the Desktop; returns the zip's path.</summary>
+    public string SaveDiagnostics() => Diagnostics.SaveBundle(_monitor, _settings);
 
     private void PollGpu()
     {
@@ -357,6 +362,8 @@ public sealed partial class MainViewModel : Observable, IDisposable
 
     private void OnAlert(Alert a)
     {
+        Diag.Write(a.Severity >= AlertSeverity.Warning ? DiagLevel.Warn : DiagLevel.Info, DiagCategory.Alert, "alert",
+                   new { a.Key, severity = a.Severity.ToString(), a.Title, a.Detail, a.Since });
         var vm = new AlertViewModel(a.Key, a.Title, a.Detail, Theme.InfoBar(a.Severity));
         var existing = Alerts.FirstOrDefault(x => x.Key == a.Key);
         if (existing is not null) Alerts[Alerts.IndexOf(existing)] = vm;
@@ -367,6 +374,7 @@ public sealed partial class MainViewModel : Observable, IDisposable
 
     private void OnCleared(string key)
     {
+        Diag.Info(DiagCategory.Alert, "alert cleared", new { key });
         var existing = Alerts.FirstOrDefault(x => x.Key == key);
         if (existing is not null) Alerts.Remove(existing);
         RefreshStatus();

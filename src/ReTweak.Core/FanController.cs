@@ -187,7 +187,8 @@ public sealed class FanController : IDisposable
 {
     /// <summary>Seconds without a temperature before giving the fans back to the driver.</summary>
     public const int MissedTempsBeforeRelease = 3;
-    private const int OverridesBeforeWarning = 3;
+    private const int OverridesBeforeWarning = 3, OverrideWindowTicks = 10;
+    private readonly Queue<bool> _recentOverrides = new(); // last few ticks: did another program change the fans?
     /// <summary>The safety net creeps the speed up by this much per second while it's still too hot.</summary>
     private const double AssistCreepPerSecond = 2;
 
@@ -210,6 +211,7 @@ public sealed class FanController : IDisposable
     private double _integral;        // Smart: accumulated correction, % fan
     private bool _smartRunning, _smartIdle;
     private string? _smartInput;     // "hotspot" or "core": switching resets the controller
+    private object? _lastSmart;      // this tick's controller terms, for the diagnostic log
     private string? _blocked;        // write failed; don't retry until the options change
     private bool _blockedByPermission;
     private bool _disposed;
@@ -244,13 +246,41 @@ public sealed class FanController : IDisposable
             _blocked = null; // new settings: allow another attempt
             _blockedByPermission = false;
             _overrides = 0;
+            _recentOverrides.Clear();
             if (value.Source != previous.Source) _smoothed = null; // a different input: don't average across it
             if (value.Mode != FanMode.Driver) { _assisting = false; _coolSince = null; }
             if (value.Mode != FanMode.Smart || value.SmartPriority != previous.SmartPriority) _smartRunning = false;
         }
     }
 
+    /// <summary>Runs one control step; with diagnostics on, logs the inputs, internals and the decision.</summary>
     public FanStatus Tick(FanTemps temps)
+    {
+        var before = Status;
+        _lastSmart = null;
+        var st = TickCore(temps);
+        if (Diag.IsOn(DiagLevel.Debug))
+            Diag.Debug(DiagCategory.Fan, "tick", new
+            {
+                mode = _options.Mode.ToString(),
+                temps.CoreC, temps.HotspotC, temps.HotspotMaxC, temps.MemoryC, temps.PowerFraction,
+                smoothedC = _smoothed,
+                written = _applied,
+                commanded = _commanded,
+                smart = _lastSmart,
+                assisting = _assisting,
+                zeroRpm = _inZeroRpm,
+                overrides = _overrides,
+                blocked = _blocked,
+                status = st.Text,
+            });
+        if (st.Mode != before.Mode || st.Assisting != before.Assisting || st.NeedsAdmin != before.NeedsAdmin
+            || st.Severity != before.Severity || (st.Percent is null) != (before.Percent is null))
+            Diag.Info(DiagCategory.Fan, "fan state changed", new { from = before.Text, to = st.Text, severity = st.Severity.ToString() });
+        return st;
+    }
+
+    private FanStatus TickCore(FanTemps temps)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         var o = _options;
@@ -358,16 +388,28 @@ public sealed class FanController : IDisposable
         double effective = Math.Abs(error) <= tune.DeadbandC ? 0 : error - Math.Sign(error) * tune.DeadbandC;
         if (!_smartRunning)
         {
-            // Bumpless: pick the integral so the first output is where the fans already are.
+            // Bumpless: pick the integral so the first output is where the fans already are. If that needs an
+            // integral pushing against the error (e.g. positive while far below target), the gap is the
+            // proportional term saturating, not a lasting offset: start at zero and let the ramp limit move
+            // the fans from where the driver had them. (Seen in a diagnostic log: +60 at 43 °C below target.)
             double now0 = _applied ?? _readTarget() ?? feedForward;
-            _integral = Math.Clamp(now0 - feedForward - tune.Kp * effective, -60, 60);
+            double bumpless = now0 - feedForward - tune.Kp * effective;
+            _integral = bumpless * effective < 0 ? 0 : Math.Clamp(bumpless, -60, 60);
             _smartRunning = true;
         }
 
         double unclamped = feedForward + tune.Kp * effective + _integral;
         bool pinnedHigh = unclamped >= _range.Max && effective > 0, pinnedLow = unclamped <= _range.Min && effective < 0;
         if (!pinnedHigh && !pinnedLow) _integral = Math.Clamp(_integral + tune.Ki * effective * dt, -60, 60);
+        else if (_integral * effective < 0) _integral *= Math.Exp(-dt / 10); // pinned, and the integral points the wrong way: drain it
         int target100 = failsafe is not null ? 100 : (int)Math.Round(Math.Clamp(feedForward + tune.Kp * effective + _integral, _range.Min, _range.Max));
+        _lastSmart = new
+        {
+            input, targetC = target, errorC = Math.Round(error, 2), effectiveC = Math.Round(effective, 2),
+            feedForward = Math.Round(feedForward, 2), proportional = Math.Round(tune.Kp * effective, 2),
+            integral = Math.Round(_integral, 2), unclamped = Math.Round(unclamped, 2), pinnedHigh, pinnedLow,
+            target = target100, priority = o.SmartPriority.ToString(),
+        };
 
         var ramped = o with { RampUpPerSecond = tune.RampUp, RampDownPerSecond = tune.RampDown };
         if (Drive(target100, jump: failsafe is not null, ramped, dt) is { } blocked) return blocked;
@@ -449,7 +491,11 @@ public sealed class FanController : IDisposable
         // Afterburner...) may be fighting over the fans.
         int? driverTarget = _applied is null ? null : _readTarget();
         bool overridden = driverTarget is int d && Math.Abs(d - _applied!.Value) > 2;
-        _overrides = overridden ? _overrides + 1 : 0;
+        // Count overrides over the last few ticks, not in a row: a tool that fights every other tick
+        // (seen in a log: ASUS's fan service setting 0% every ~3 s) never makes three in a row.
+        _recentOverrides.Enqueue(overridden);
+        while (_recentOverrides.Count > OverrideWindowTicks) _recentOverrides.Dequeue();
+        _overrides = _recentOverrides.Count(o => o);
         if (write == _applied && !overridden) return null;
 
         if (_set(write) is { } error)
@@ -502,6 +548,7 @@ public sealed class FanController : IDisposable
         _commanded = null;
         _lastTarget = null;
         _overrides = 0;
+        _recentOverrides.Clear();
     }
 
     /// <summary>Gives the fans back to the driver if ReTweak holds them.</summary>

@@ -43,20 +43,30 @@ public partial class App : Application
 
         // --minimized: started with Windows; stay in the tray until the user opens the window.
         bool minimized = cmdArgs.Contains("--minimized", StringComparer.OrdinalIgnoreCase);
+        var settings = AppSettings.Load();
+        Diagnostics.Apply(settings.DiagnosticsLevel); // before anything else, so startup problems are logged
+        Diagnostics.HookCrashes(this);
         Notifications.Register();
         GpuMonitor? monitor = null;
         try
         {
             monitor = new GpuMonitor();
-            _window = new MainWindow(new MainViewModel(monitor, AppSettings.Load()));
+            Diag.Info(DiagCategory.App, "started", Diagnostics.Describe(monitor, settings));
+            _window = new MainWindow(new MainViewModel(monitor, settings));
         }
         catch (Exception ex)
         {
+            Diag.Error(DiagCategory.App, "couldn't start monitoring", ex, Diagnostics.Describe(monitor, settings));
             monitor?.Dispose(); // stop NVML and the hotspot sampler if the view model couldn't start
             _window = MainWindow.ForError(ex.Message);
             minimized = false; // an error with no visible window would be invisible
         }
-        _window.Closed += (_, _) => Notifications.Unregister();
+        _window.Closed += (_, _) =>
+        {
+            Notifications.Unregister();
+            Diag.Info(DiagCategory.App, "exiting");
+            Diag.Shutdown();
+        };
         _ = Task.Run(Autostart.MigrateIfElevated); // old Run-key entry -> elevated logon task
         if (!minimized) _window.Activate();
     }

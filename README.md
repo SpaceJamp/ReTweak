@@ -20,6 +20,7 @@ going wrong.
   step on short spikes; optional 0 RPM below a temperature you choose. Full speed at a core, hotspot or
   memory failsafe in every mode that writes. The Auto safety net leaves the driver in charge and only steps in
   when the hotspot or memory gets too hot, or the hotspot runs far ahead of the core (poor cooler contact)
+- Detailed **diagnostic log** and a one-click diagnostics bundle (see [below](#diagnostic-log))
 - Native Windows notifications for alerts
 - Runs in the notification area: closing the window keeps monitoring; the tray icon shows the worst active alert
 - Optional start with Windows as administrator (`--minimized`, tray only; see below), CSV logging and adjustable thresholds in Settings
@@ -54,6 +55,21 @@ temperature registers, but Windows only lets kernel drivers read those, so every
   as administrator. Unelevated, the tile says so.
 
 How the register was found: [docs/power-detector.md](docs/power-detector.md#hotspot-on-rtx-50-2026-10-19).
+
+## Diagnostic log
+
+For tracking down problems, Settings → Diagnostics turns on a detailed log (or start the app or
+CLI with `--debug` for one run at full detail). Files are JSON lines in
+`%LocalAppData%\ReTweak\diagnostics` (10 MB each, last 10 kept), written from a background thread:
+
+| Level | Adds |
+|---|---|
+| Events | startup environment (driver, GPU, PawnIO, admin, other fan tools running), settings changes, alerts raised and cleared, fan mode changes, errors and crashes with stack traces |
+| Detailed | every sensor snapshot (all temperatures, clocks, load, power, fans), every connector frame, every fan-controller decision with its internal terms, driver-call timing (count, mean, p95, max, failures per NVML / NVAPI / I2C / PawnIO call every 10 s, plus any slow or failed call) |
+| Everything | raw hotspot register reads at 10 Hz |
+
+**Save diagnostics to Desktop** zips the logs, settings, the latest connector CSVs and an
+environment summary, ready to attach to an issue.
 
 ## Layout
 

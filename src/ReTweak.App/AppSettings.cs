@@ -18,6 +18,8 @@ public sealed record AppSettings
     public bool CloseToTray { get; init; } = true;
     public bool Toasts { get; init; } = true;
     public bool LogConnector { get; init; }
+    /// <summary>Diagnostic log level (Off by default); files go to %LocalAppData%\ReTweak\diagnostics.</summary>
+    public DiagLevel DiagnosticsLevel { get; init; } = DiagLevel.Off;
     public string LogFolder { get; init; } = Path.Combine(Folder, "logs");
 
     public static AppSettings Load()

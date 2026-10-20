@@ -27,7 +27,7 @@ public sealed class ConnectorSampler : IDisposable
     private readonly Stopwatch _clock = Stopwatch.StartNew();
 
     private ConnectorReading? _lastRaw;
-    private TimeSpan _lastChange;
+    private TimeSpan _lastChange, _lastFrameAt;
     private readonly double?[] _emaVolts = new double?[6], _emaAmps = new double?[6];
 
     public AlertEngine Alerts { get; }
@@ -69,7 +69,11 @@ public sealed class ConnectorSampler : IDisposable
         {
             // A safety monitor must not die because a subscriber, the logger or a read threw.
             try { Tick(); }
-            catch (Exception ex) { try { Error?.Invoke(ex); } catch { } }
+            catch (Exception ex)
+            {
+                Diag.Error(DiagCategory.Connector, "connector sampler tick threw", ex);
+                try { Error?.Invoke(ex); } catch { }
+            }
 
             next += _interval;
             var wait = next - _clock.Elapsed;
@@ -85,6 +89,7 @@ public sealed class ConnectorSampler : IDisposable
 
         if (raw is null)
         {
+            Diag.Warn(DiagCategory.Connector, "connector read failed");
             Alerts.ReadFailed(uptime);
             return;
         }
@@ -98,6 +103,15 @@ public sealed class ConnectorSampler : IDisposable
         _lastRaw = raw;
         _lastChange = uptime;
         var frame = new ConnectorFrame(DateTime.Now, uptime, raw, Smooth(raw));
+        if (Diag.IsOn(DiagLevel.Debug))
+            Diag.Debug(DiagCategory.Connector, "frame", new
+            {
+                pins = raw.Pins.Select(p => new { p.Pin, v = Math.Round(p.Volts, 3), a = Math.Round(p.Amps, 3), p.Valid }),
+                totalW = Math.Round(raw.TotalWatts, 1),
+                imbalance = Math.Round(raw.Imbalance, 3),
+                sincePreviousMs = Math.Round((uptime - _lastFrameAt).TotalMilliseconds),
+            });
+        _lastFrameAt = uptime;
         Alerts.Process(frame);
         Volatile.Read(ref _log)?.Write(frame);
         FrameReceived?.Invoke(frame);

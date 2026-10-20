@@ -585,11 +585,12 @@ static class Simulate
               $"last 160 s: hotspot within {maxErr:F1} °C of 80 (mean {meanErr:F1}), fans {steady.FanPercent[^1]}%, " +
               $"{SpeedChanges(steady.FanPercent.Skip(240))} speed changes; {steady.Statuses[^1].Text}");
 
-        var step = RunPlant(smart, t => t < 200 ? 150 : 400, 520, startC: 60);
-        double peak = step.HotspotC.Skip(200).Max();
-        double settled = step.HotspotC.Skip(400).Max(h => Math.Abs(h - 80));
-        int fanAtStep = step.FanPercent[199], fanAfter = step.FanPercent[205];
-        Check("Auto (smart): load step 150 -> 400 W", peak <= 85 && settled <= 3 && fanAfter > fanAtStep,
+        // Holding the target at 250 W, then a heavy scene: the power term should move the fans before the heat arrives.
+        var step = RunPlant(smart, t => t < 300 ? 250 : 400, 620, startC: 80);
+        double peak = step.HotspotC.Skip(300).Max();
+        double settled = step.HotspotC.Skip(500).Max(h => Math.Abs(h - 80));
+        int fanAtStep = step.FanPercent[299], fanAfter = step.FanPercent[305];
+        Check("Auto (smart): load step 250 -> 400 W while holding 80 °C", peak <= 85 && settled <= 3 && fanAfter >= fanAtStep + 10,
               $"fans {fanAtStep}% -> {fanAfter}% within 5 s of the step (power feed-forward), peak {peak:F1} °C, " +
               $"within {settled:F1} °C of 80 two minutes later");
 
@@ -628,6 +629,31 @@ static class Simulate
 
         var denied = RunPlant(smart, _ => 300, 3, refuse: true);
         Check("Auto (smart) without administrator rights", denied.Statuses[^1].NeedsAdmin && denied.FanPercent.All(f => f == 30), denied.Statuses[^1].Text);
+
+        // From a diagnostic log: taking over at idle (43 °C below target, driver at 46%) left the integral
+        // pinned at +60, which would have run the fans near full speed once a game started.
+        var cold = RunPlant(smart, t => t < 90 ? 30 : 330, 480, startC: 37, driverSpeed: 46);
+        int reach = cold.HotspotC.FindIndex(90, h => h >= 78);
+        int fanAtReach = reach >= 0 ? cold.FanPercent[reach] : -1;
+        double undershoot = reach >= 0 ? cold.HotspotC.Skip(reach).Min() : double.NaN;
+        double coldSettled = cold.HotspotC.Skip(380).Max(h => Math.Abs(h - 80));
+        Check("Auto (smart): takes over at idle, then a game starts (no wound-up integral)",
+              reach >= 0 && fanAtReach <= 75 && undershoot >= 74 && coldSettled <= 3,
+              $"fans {fanAtReach}% when the hotspot first reached 78 °C (wound up would be ~90%), lowest after {undershoot:F1} °C, " +
+              $"within {coldSettled:F1} °C of 80 at the end");
+
+        // From the same log: ASUS's fan service set 0% every few seconds; never three overrides in a row.
+        var fighter = new FakeFans();
+        using (var fc = fighter.Make(new FanOptions { Mode = FanMode.Fixed, FixedPercent = 40, RampUpPerSecond = 0, RampDownPerSecond = 0 }))
+        {
+            FanStatus st = fc.Status;
+            for (int i = 0; i < 12; i++)
+            {
+                fighter.ForeignTarget = i % 2 == 1 ? 0 : null; // every other tick another program sets 0%
+                st = fighter.Tick(fc, 50);
+            }
+            Check("Another program changing the fans every other tick is reported", st.Text.Contains("another program"), st.Text);
+        }
 
         Check("New installs default to Auto (smart)", new FanOptions().Mode == FanMode.Smart && new FanOptions().Validate() is null,
               $"default mode {new FanOptions().Mode}");
