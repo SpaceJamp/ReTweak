@@ -86,13 +86,20 @@ The elevated ReTweak never lets files or registry keys your normal account contr
 it doesn't follow junctions or symlinks in folders it writes to (settings, learned airflow, logs),
 only writes CSV logs and the diagnostics zip inside your profile, keeps its diagnostic log in an
 admin-only folder, starts `explorer.exe` and `schtasks.exe` by full path without ShellExecute, and
-checks that a newly registered logon task really runs ReTweak.
+checks that a newly registered logon task really runs ReTweak. While it writes in your profile it holds
+every folder on the way open, so none can be swapped for a junction mid-write. Native DLLs (`nvml.dll`,
+`nvapi64.dll`) load from System32 only, and .NET startup hooks are off.
+
+**Fan watchdog**: a manual fan speed outlives the program that set it. The elevated ReTweak starts a small
+copy of itself (`--fan-watchdog`) that waits for it; if ReTweak is killed or crashes, the watchdog hands every
+fan back to the driver's curve.
 
 **Security check** (Settings → Security, or `ReTweak.Cli --security-check`, also in the diagnostics
 zip): a read-only audit of ReTweak's program folder (can your normal account change what the
 elevated logon task runs?), the bundled PawnIO module's hash, the logon task, the PawnIO driver's
 signature, ReTweak's data folders, per-user registry entries used by UAC-bypass malware, other
-risky hardware drivers (WinRing0, RTCore64, older ASUS AsIO/IOMap) and fan tools, and Windows
+risky hardware drivers (WinRing0, RTCore64, older ASUS AsIO/IOMap, with version and whether loaded) and fan
+tools, environment variables that inject code into .NET programs (profilers, startup hooks, DOTNET_ROOT), and Windows
 protections (UAC, Memory Integrity, the vulnerable driver blocklist, Secure Boot). Each item says
 what it found and what to do about it.
 
@@ -114,14 +121,29 @@ The version is set in `Directory.Build.props` (`VersionPrefix`); each build adds
 | `research/` | Reverse-engineering scripts used to recover the sensor protocol |
 | `docs/` | Protocol and measurement notes |
 
+## Install
+
+ReTweak runs as administrator, so for everyday use install it where only administrators can change it:
+
+```bash
+powershell -ExecutionPolicy Bypass -File tools/install.ps1
+```
+
+This builds a self-contained Release (ReTweak carries its own .NET runtime) and installs it to
+`C:\Program Files\ReTweak`, after one UAC prompt. If Start with Windows is on, the installed copy moves the
+logon task to itself. Run it again to update. Settings and learned data stay in `%LocalAppData%\ReTweak`.
+
 ## Build and run
 
-Requires the .NET 10 SDK and an NVIDIA driver.
+Requires the .NET 10 SDK and an NVIDIA driver. For development:
 
 ```bash
 dotnet build
 dotnet run --project src/ReTweak.App
 ```
+
+Run from the build folder, the security check warns that the program folder is user-writable; that's
+expected for development, but use the installed copy for Start with Windows.
 
 ## CLI
 
@@ -166,8 +188,8 @@ administrator, Windows asks when you save. Check it with `schtasks /Query /TN Re
 
 Older versions used the `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` key, which can't
 start an elevated app. ReTweak moves such an entry to the task the next time it runs as administrator,
-or when you save Settings. If you move ReTweak to another folder, open Settings and save to point the
-task at the new location.
+or when you save Settings. An installed copy (Program Files) moves a task that points at another folder to
+itself; to point it somewhere else, open Settings and save.
 
 ## License
 

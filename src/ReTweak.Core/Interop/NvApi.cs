@@ -94,7 +94,8 @@ internal sealed unsafe class NvApi
     public static NvApi? TryLoad()
     {
         string name = Environment.Is64BitProcess ? "nvapi64.dll" : "nvapi.dll";
-        if (!NativeLibrary.TryLoad(name, out var lib)) return null;
+        // System32 only (the driver installs it there): never a copy planted next to an elevated ReTweak.
+        if (!NativeLibrary.TryLoad(name, typeof(NvApi).Assembly, DllImportSearchPath.System32, out var lib)) return null;
         try { return new NvApi(lib); }
         catch (NvApiException) { return null; }
     }

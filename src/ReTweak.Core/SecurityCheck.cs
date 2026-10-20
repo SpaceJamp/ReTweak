@@ -140,15 +140,52 @@ public static partial class SecurityCheck
                       "Some software sets these legitimately; if you don't recognise them, scan with Microsoft Defender and remove them.");
         });
 
+        // Environment variables that make every .NET program load extra code at startup. Elevated programs get the
+        // user's environment, so user-level code can set these and run inside an elevated ReTweak. A self-contained
+        // install ignores DOTNET_ROOT and ReTweak turns startup hooks off, but a profiler loads before any of
+        // ReTweak's code runs: it can only be detected.
+        Add(() =>
+        {
+            string[] names =
+            [
+                "CORECLR_ENABLE_PROFILING", "CORECLR_PROFILER", "CORECLR_PROFILER_PATH", "CORECLR_PROFILER_PATH_64",
+                "COR_ENABLE_PROFILING", "COR_PROFILER", "COR_PROFILER_PATH", "DOTNET_STARTUP_HOOKS",
+                "DOTNET_ROOT", "DOTNET_ROOT_X64", "DOTNET_ADDITIONAL_DEPS", "DOTNET_SHARED_STORE",
+            ];
+            using var userEnv = Registry.CurrentUser.OpenSubKey("Environment");
+            // The saved user environment (what user-level code can change) for all of them; this process's own for the
+            // ones nothing legitimate sets (`dotnet run` sets DOTNET_ROOT for the program it starts).
+            bool live(string n) => (n.Contains("PROFIL", StringComparison.Ordinal) || n == "DOTNET_STARTUP_HOOKS")
+                                   && !string.IsNullOrEmpty(Environment.GetEnvironmentVariable(n));
+            var set = names.Where(n => live(n) || userEnv?.GetValue(n) is string { Length: > 0 }).ToList();
+            bool profiler = set.Any(n => n.Contains("PROFIL", StringComparison.Ordinal));
+            return set.Count == 0
+                ? new("Account", "No code-injection environment variables", CheckStatus.Pass, "None of the variables that load extra code into .NET programs are set.")
+                : new("Account", "Environment variables that load code into .NET programs are set", profiler ? CheckStatus.Fail : CheckStatus.Warn,
+                      string.Join(", ", set) + (profiler ? ". A profiler runs inside every .NET program you start, including ReTweak as administrator." : "."),
+                      "Unless a developer tool you use set them on purpose, remove them (System Properties > Environment Variables) and scan with Microsoft Defender.");
+        });
+
         // ---- other hardware drivers and tools ----
         Add(() =>
         {
             using var hklm = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64);
-            var present = RiskyDrivers.Where(d => { using var k = hklm.OpenSubKey($@"SYSTEM\CurrentControlSet\Services\{d.Service}"); return k is not null; }).ToList();
+            var present = RiskyDrivers.Select(d =>
+            {
+                using var k = hklm.OpenSubKey($@"SYSTEM\CurrentControlSet\Services\{d.Service}");
+                if (k is null) return null;
+                // Which file and version, and whether it's loaded now: what the user needs to judge it.
+                string file = k.GetValue("ImagePath") is string image ? DriverPath(image) : "";
+                string version = File.Exists(file) ? FileVersionInfo.GetVersionInfo(file).FileVersion ?? "?" : "file missing";
+                bool loaded = DriverRunning(d.Service);
+                return $"{d.What} [{Path.GetFileName(file)} {version}, {(loaded ? "loaded now" : "not loaded")}]";
+            }).OfType<string>().ToList();
             return present.Count == 0
                 ? new("Drivers", "No known risky hardware drivers installed", CheckStatus.Pass, string.Join(", ", RiskyDrivers.Select(d => d.Service)) + " not found.")
-                : new("Drivers", "Risky hardware drivers installed", CheckStatus.Warn, string.Join(" · ", present.Select(d => d.What)),
-                      "Update or uninstall the tool that installed it; ReTweak only needs PawnIO.");
+                : new("Drivers", "Risky hardware drivers installed", CheckStatus.Warn, string.Join(" · ", present),
+                      "While installed, any program with administrator rights can load it, and a loaded one may be usable by others. " +
+                      "If you use ReTweak instead of the tool that installed it, uninstall that tool (Settings > Apps > Installed apps); " +
+                      "otherwise keep it updated. ReTweak only needs PawnIO.");
         });
         Add(() =>
         {
@@ -224,6 +261,36 @@ public static partial class SecurityCheck
     }
 
     /// <summary>"\SystemRoot\System32\drivers\x.sys" / "system32\drivers\x.sys" / "\??\C:\..." to a real path.</summary>
+    /// <summary>True if the driver service is running (loaded). Asks the service manager, which works unelevated.</summary>
+    private static bool DriverRunning(string service)
+    {
+        nint scm = OpenSCManagerW(null, null, ScManagerConnect);
+        if (scm == 0) return false;
+        try
+        {
+            nint svc = OpenServiceW(scm, service, ServiceQueryStatus);
+            if (svc == 0) return false;
+            try { return QueryServiceStatus(svc, out var st) && st.CurrentState == ServiceRunning; }
+            finally { CloseServiceHandle(svc); }
+        }
+        finally { CloseServiceHandle(scm); }
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ServiceStatus { public uint ServiceType, CurrentState, ControlsAccepted, Win32ExitCode, ServiceSpecificExitCode, CheckPoint, WaitHint; }
+    private const uint ScManagerConnect = 0x1, ServiceQueryStatus = 0x4, ServiceRunning = 4;
+
+    [LibraryImport("advapi32.dll", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
+    private static partial nint OpenSCManagerW(string? machine, string? database, uint access);
+    [LibraryImport("advapi32.dll", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
+    private static partial nint OpenServiceW(nint scm, string name, uint access);
+    [LibraryImport("advapi32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool QueryServiceStatus(nint service, out ServiceStatus status);
+    [LibraryImport("advapi32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool CloseServiceHandle(nint handle);
+
     private static string DriverPath(string image)
     {
         string windows = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
