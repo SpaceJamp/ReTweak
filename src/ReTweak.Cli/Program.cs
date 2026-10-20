@@ -61,6 +61,8 @@ if (args.Contains("--alerts"))
 
 bool watch = args.Contains("--watch");
 Console.WriteLine($"Driver {monitor.DriverVersion}");
+// The hotspot is sampled at 10 Hz and averaged over a second: give the window time to fill.
+if (monitor.Gpus.Any(g => monitor.HasHotspot(g.Index))) Thread.Sleep(GpuMonitor.HotspotWindow);
 do
 {
     foreach (var gpu in monitor.Gpus)
@@ -68,10 +70,12 @@ do
         var s = monitor.Sample(gpu.Index);
         Console.WriteLine($"[{gpu.Index}] {gpu.Name}  (bus {gpu.PciBus}, subsys {gpu.SubVendorId:X4}:{gpu.SubDeviceId:X4})");
         Console.WriteLine($"    core {s.CoreTempC:F2}°C" +
-                          (s.HotspotC is double hs ? $"  hotspot {hs:F1}°C" : $"  hotspot - ({monitor.HotspotNote(gpu.Index)}" +
+                          (s.HotspotC is double hs ? $"  hotspot {hs:F1}°C (1 s avg, peak {s.HotspotMaxC:F1})" : $"  hotspot - ({monitor.HotspotNote(gpu.Index)}" +
                                                          (monitor.HotspotState(gpu.Index) == HotspotAvailability.PawnIoMissing ? "; optional, see https://pawnio.eu/" : "") + ")") +
                           (s.MemoryTempC is double mt ? $"  memory {mt:F1}°C ({s.MemoryTempSource})" : "") +
                           $"  core clock {s.CoreClockMhz} MHz  mem clock {s.MemoryClockMhz} MHz  load {s.GpuUtilization}%");
+        if (s.ThermalChannels is { } ch)
+            Console.WriteLine("    gpu thermal channels: " + string.Join("  ", ch.Select((c, i) => $"#{i + 1} {(c is double v ? $"{v:F1}°C" : "-")}")) + "  (#5 = max of #1-#4 = hotspot)");
         if (s.BoardTemps is { } board)
             Console.WriteLine("    board: " + string.Join("  ", board.Select(b => $"{b.Name} {(b.Celsius is double c ? $"{c:F1}°C" : "-")}")));
         Console.WriteLine($"    power {s.PowerWatts:F1} / {s.PowerLimitWatts:F0} W  fans {string.Join(", ", s.FanPercents.Select(f => $"{f}%"))}");
@@ -122,7 +126,7 @@ static int RunFan(GpuMonitor monitor, string mode, string[] args)
     do
     {
         var s = monitor.Sample(gpu.Index, includeConnector: false);
-        var st = fans.Tick(s.CoreTempC);
+        var st = fans.Tick(new FanTemps(s.CoreTempC, s.HotspotC, s.MemoryTempC, s.HotspotMaxC));
         Console.WriteLine($"{DateTime.Now:HH:mm:ss}  core {s.CoreTempC:F1} °C  fans {string.Join("/", s.FanPercents.Select(f => $"{f}%"))}  {st.Text}");
         if (st.NeedsAdmin) { result = 1; break; } // nothing to do until rerun as administrator
     } while (!done.Wait(1000) && (duration == Timeout.InfiniteTimeSpan || started.Elapsed < duration));
@@ -170,10 +174,17 @@ static void RunAlerts(GpuMonitor monitor, string[] args)
     StreamWriter? gpuLog = null;
     if (logIdx >= 0 && logIdx + 1 < args.Length)
     {
+        const string header = "time,board_w,limit_w,temp_c,core_mhz,mem_mhz,load_pct,mem_temp_c,hotspot_c,hotspot_max_c";
         string gpuPath = Path.ChangeExtension(args[logIdx + 1], ".gpu.csv");
-        bool fresh = !File.Exists(gpuPath);
+        // An older log with different columns: start a new file rather than append rows that don't match its header.
+        if (File.Exists(gpuPath) && File.ReadLines(gpuPath).FirstOrDefault() is { } existing && existing != header)
+        {
+            gpuPath = Path.ChangeExtension(args[logIdx + 1], $".gpu.{DateTime.Now:yyyyMMdd-HHmmss}.csv");
+            Console.WriteLine($"{Path.GetFileName(Path.ChangeExtension(args[logIdx + 1], ".gpu.csv"))} has older columns; writing {Path.GetFileName(gpuPath)} instead.");
+        }
+        bool fresh = !File.Exists(gpuPath) || new FileInfo(gpuPath).Length == 0;
         gpuLog = new StreamWriter(gpuPath, append: true) { AutoFlush = true };
-        if (fresh) gpuLog.WriteLine("time,board_w,limit_w,temp_c,core_mhz,mem_mhz,load_pct,mem_temp_c,hotspot_c");
+        if (fresh) gpuLog.WriteLine(header);
     }
 
     Console.WriteLine($"Monitoring {gpu.Name} connector. Ctrl+C to stop." + (log is null ? "" : " Logging to CSV.") +
@@ -190,7 +201,8 @@ static void RunAlerts(GpuMonitor monitor, string[] args)
         sampler.Alerts.ProcessGpu(s); // core / memory temperature alerts
         gpuLog?.WriteLine(string.Join(",", DateTime.Now.ToString("O"), s.PowerWatts?.ToString("F1", inv), s.PowerLimitWatts?.ToString("F0", inv),
                                       s.CoreTempC?.ToString("F2", inv), s.CoreClockMhz, s.MemoryClockMhz, s.GpuUtilization,
-                                      s.MemoryTempC?.ToString("F0", inv), s.HotspotC?.ToString("F2", inv)));
+                                      s.MemoryTempC?.ToString("F0", inv), s.HotspotC?.ToString("F2", inv),
+                                      s.HotspotMaxC?.ToString("F2", inv)));
     }
     gpuLog?.Dispose();
     Console.WriteLine("Stopped.");

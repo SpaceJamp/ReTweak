@@ -12,7 +12,7 @@ namespace ReTweak.Core;
 public sealed class GpuMonitor : IDisposable
 {
     private sealed record Device(GpuInfo Info, nint Nvml, uint FanCount, AsusPowerDetector? Detector, NvidiaThermal? Thermal,
-                                 NvidiaHotspot? Hotspot, HotspotAvailability HotspotState, string HotspotNote);
+                                 HotspotSampler? Hotspot, HotspotAvailability HotspotState, string HotspotNote);
 
     private readonly List<Device> _devices = [];
     private bool _disposed;
@@ -34,6 +34,7 @@ public sealed class GpuMonitor : IDisposable
         try { DriverVersion = Nvml.GetDriverVersion(); Enumerate(); }
         catch
         {
+            foreach (var d in _devices) d.Hotspot?.Dispose(); // stop sampler threads already started
             Nvml.Shutdown(); // don't leak the NVML init if enumeration fails
             throw;
         }
@@ -62,7 +63,7 @@ public sealed class GpuMonitor : IDisposable
             // Only probe the I2C bus on ASUS boards: address 0x56 means nothing on other vendors' cards.
             AsusPowerDetector? detector = null;
             NvidiaThermal? thermal = null;
-            NvidiaHotspot? hotspot = null;
+            HotspotSampler? hotspot = null;
             string hotspotNote = "Not reported by this card";
             var hotspotState = HotspotAvailability.NotApplicable;
             if (nvapi is not null && nvapiByBus.TryGetValue(pci.Bus, out var nvHandle))
@@ -75,7 +76,8 @@ public sealed class GpuMonitor : IDisposable
                     // RTX 50 dropped the hotspot from the driver APIs; read the GPU register through PawnIO instead.
                     if (arch == Nvml.ArchBlackwell)
                     {
-                        hotspot = NvidiaHotspot.TryCreate(pci.Bus, pci.Device, PciFunction(pci), out hotspotState, out string why);
+                        var reader = NvidiaHotspot.TryCreate(pci.Bus, pci.Device, PciFunction(pci), out hotspotState, out string why);
+                        hotspot = reader is null ? null : new HotspotSampler(reader);
                         hotspotNote = hotspot is null ? $"Unavailable: {why}" : "from GPU register via PawnIO";
                     }
                 }
@@ -94,6 +96,9 @@ public sealed class GpuMonitor : IDisposable
     }
 
     public bool HasHotspot(int gpuIndex) => _devices[gpuIndex].Hotspot is not null;
+
+    /// <summary>The hotspot is averaged over this window; a fresh monitor needs this long for a full one.</summary>
+    public static TimeSpan HotspotWindow => HotspotSampler.WindowLength;
 
     public HotspotAvailability HotspotState(int gpuIndex) => _devices[gpuIndex].HotspotState;
 
@@ -135,6 +140,7 @@ public sealed class GpuMonitor : IDisposable
         // Memory temperature: on ASUS boards use the board sensors by the memory (what GPU Tweak III
         // shows); otherwise fall back to the memory chips' own sensor (reads ~10 °C higher).
         var board = d.Detector?.ReadBoardTemps();
+        var hotspot = d.Hotspot?.Summary(); // last second at 10 Hz; hotspot = channel #5, the max of sensors #1-#4
         double? memBoard = board is null ? null
             : new[] { board[AsusPowerDetector.MemorySensor1].Celsius, board[AsusPowerDetector.MemorySensor2].Celsius }.Max();
         double? memTemp = memBoard ?? memChip;
@@ -158,7 +164,9 @@ public sealed class GpuMonitor : IDisposable
             memTemp,
             board,
             memSource,
-            d.Hotspot?.Read());
+            hotspot?.AverageC,
+            hotspot?.Channels,
+            hotspot?.MaxC);
     }
 
     public int FanCount(int gpuIndex) => (int)_devices[gpuIndex].FanCount;

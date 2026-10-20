@@ -56,6 +56,7 @@ internal sealed partial class TrayIcon : IDisposable
         _hwnd = CreateWindowEx(0, WindowClass, "ReTweak", 0, 0, 0, 0, 0, 0, 0, wc.hInstance, 0);
         // When elevated, still let a normal copy ask us to show the window (UIPI blocks it otherwise).
         ChangeWindowMessageFilterEx(_hwnd, WmShowRequest, MsgFltAllow, 0);
+        if (WmTaskbarCreated != 0) ChangeWindowMessageFilterEx(_hwnd, WmTaskbarCreated, MsgFltAllow, 0); // re-add the icon after Explorer restarts
         _iconNormal = LoadTrayIcon("tray.ico");
         _iconWarning = LoadTrayIcon("tray-warning.ico");
         _iconCritical = LoadTrayIcon("tray-critical.ico");

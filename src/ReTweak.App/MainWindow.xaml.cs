@@ -49,6 +49,9 @@ public sealed partial class MainWindow : Window
     }
 
     public static Visibility Not(bool value) => value ? Visibility.Collapsed : Visibility.Visible;
+    /// <summary>Column widths of a 0-100 % bar: the filled part and the rest.</summary>
+    public static GridLength Filled(double percent) => new(Math.Clamp(percent, 0, 100), GridUnitType.Star);
+    public static GridLength Unfilled(double percent) => new(100 - Math.Clamp(percent, 0, 100), GridUnitType.Star);
 
     [System.Runtime.InteropServices.DllImport("user32.dll")]
     private static extern uint GetDpiForWindow(nint hwnd);
@@ -124,57 +127,231 @@ public sealed partial class MainWindow : Window
         DrawFanCurve();
     }
 
-    private const double FanChartMinC = 20, FanChartMaxC = 100;
+    private const double FanChartMinC = 20, FanChartMaxC = 110, DragGrabRadius = 14;
+    // Plot area inside the canvas: room on the left for the fan-speed axis, below for the temperature axis.
+    private const double PlotLeft = 58, PlotTop = 8, PlotRight = 10, PlotBottom = 38;
+    private List<FanPoint>? _dragCurve; // working copy while a point is being dragged
+    private int _dragIndex = -1;
+
+    private async void FanPreset_Click(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.Tag is string name && FanOptions.Presets.TryGetValue(name, out var curve)
+            && ViewModel.SetFanCurve(curve, switchToCurve: true) is { } problem)
+            await new ContentDialog { Title = "Can't use that preset", Content = problem, CloseButtonText = "OK", XamlRoot = Content.XamlRoot }.ShowAsync();
+    }
+
+    /// <summary>Size of the plot area (the canvas minus the axes).</summary>
+    private (double W, double H) FanChartSize =>
+        (FanChart.ActualWidth - PlotLeft - PlotRight, FanChart.ActualHeight - PlotTop - PlotBottom);
+    private double FanX(double c) => PlotLeft + Math.Clamp((c - FanChartMinC) / (FanChartMaxC - FanChartMinC), 0, 1) * FanChartSize.W;
+    private double FanY(double pct) => PlotTop + FanChartSize.H - Math.Clamp(pct / 100, 0, 1) * FanChartSize.H;
+
+    private void FanChart_PointerPressed(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+    {
+        var o = ViewModel.FanOptions;
+        if (o.Mode != FanMode.Curve) return;
+        var pos = e.GetCurrentPoint(FanChart).Position;
+        int nearest = -1;
+        double best = DragGrabRadius;
+        for (int i = 0; i < o.Curve.Count; i++)
+        {
+            double d = Math.Sqrt(Math.Pow(FanX(o.Curve[i].TempC) - pos.X, 2) + Math.Pow(FanY(o.Curve[i].Percent) - pos.Y, 2));
+            if (d < best) (best, nearest) = (d, i);
+        }
+        if (nearest < 0) return;
+        _dragCurve = [.. o.Curve];
+        _dragIndex = nearest;
+        FanChart.CapturePointer(e.Pointer);
+        e.Handled = true;
+        DrawFanCurve();
+    }
+
+    private void FanChart_PointerMoved(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+    {
+        if (_dragCurve is null) return;
+        var pos = e.GetCurrentPoint(FanChart).Position;
+        var (w, h) = FanChartSize;
+        if (w <= 0 || h <= 0) return;
+        int i = _dragIndex;
+        // Stay between the neighbours so the curve keeps rising: temperatures 1 °C apart, speeds never falling.
+        double minC = i > 0 ? _dragCurve[i - 1].TempC + 1 : FanChartMinC;
+        double maxC = i < _dragCurve.Count - 1 ? _dragCurve[i + 1].TempC - 1 : FanChartMaxC;
+        int minPct = i > 0 ? _dragCurve[i - 1].Percent : 0;
+        int maxPct = i < _dragCurve.Count - 1 ? _dragCurve[i + 1].Percent : 100;
+        double c = Math.Clamp(Math.Round(FanChartMinC + (pos.X - PlotLeft) / w * (FanChartMaxC - FanChartMinC)), minC, maxC);
+        int pct = Math.Clamp((int)Math.Round((PlotTop + h - pos.Y) / h * 100), minPct, maxPct);
+        _dragCurve[i] = new FanPoint(c, pct);
+        e.Handled = true;
+        DrawFanCurve();
+    }
+
+    private async void FanChart_PointerReleased(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+    {
+        if (_dragCurve is not { } curve) return;
+        _dragCurve = null;
+        _dragIndex = -1;
+        FanChart.ReleasePointerCapture(e.Pointer);
+        e.Handled = true;
+        if (ViewModel.SetFanCurve(curve, switchToCurve: false) is { } problem)
+            await new ContentDialog { Title = "Can't save the curve", Content = problem, CloseButtonText = "OK", XamlRoot = Content.XamlRoot }.ShowAsync();
+        DrawFanCurve();
+    }
+
+    private void FanChart_PointerCaptureLost(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+    {
+        if (_dragCurve is null) return;
+        _dragCurve = null; // drag cancelled (window lost focus...): keep the saved curve
+        _dragIndex = -1;
+        DrawFanCurve();
+    }
+
+    // The fan chart is rebuilt only when its size, the settings or a drag change; the once-a-second
+    // update just moves the "now" dot (rebuilding ~60 elements every second cost ~10% of a core).
+    private (double W, double H, FanOptions? Options)? _fanChartKey;
+    private Ellipse? _fanNowDot;
 
     private void DrawFanCurve()
     {
         if (!AppWindow.IsVisible || !ViewModel.HasFanControl) return;
         var canvas = FanChart;
-        canvas.Children.Clear();
-        double w = canvas.ActualWidth, h = canvas.ActualHeight - 16; // bottom strip for the °C labels
+        var (w, h) = FanChartSize;
         if (w <= 0 || h <= 0) return;
 
         var o = ViewModel.FanOptions;
-        double X(double c) => Math.Clamp((c - FanChartMinC) / (FanChartMaxC - FanChartMinC), 0, 1) * w;
-        double Y(double pct) => h - Math.Clamp(pct / 100, 0, 1) * h;
+        var key = (w, h, (FanOptions?)o);
+        if (_dragCurve is null && _fanChartKey == key && _fanNowDot is not null)
+        {
+            PlaceNowDot(_fanNowDot, o);
+            return;
+        }
+        _fanChartKey = _dragCurve is null ? key : null; // while dragging, rebuild on every move
+        canvas.Children.Clear();
+        _fanNowDot = null;
+        var curve = _dragCurve ?? o.Curve;
+        double X(double c) => FanX(c);
+        double Y(double pct) => FanY(pct);
         var grid = (Brush)Application.Current.Resources["ControlStrongStrokeColorDisabledBrush"];
         var label = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"];
 
-        foreach (double pct in new[] { 0.0, 50, 100 })
-            canvas.Children.Add(new Line { X1 = 0, X2 = w, Y1 = Y(pct), Y2 = Y(pct), Stroke = grid, StrokeThickness = 1 });
-        for (double c = 30; c < FanChartMaxC; c += 20)
+        double left = PlotLeft, top = PlotTop, right = PlotLeft + w, bottom = PlotTop + h;
+        var axis = (Brush)Application.Current.Resources["TextFillColorTertiaryBrush"];
+        TextBlock Label(string text, double size = 11) => new() { Text = text, FontSize = size, Foreground = label };
+
+        // Fan speed axis (y): gridline and label every 25 %.
+        for (int pct = 0; pct <= 100; pct += 25)
         {
-            var t = new TextBlock { Text = $"{c:F0}°", FontSize = 11, Foreground = label };
-            Canvas.SetLeft(t, X(c) - 8);
-            Canvas.SetTop(t, h + 1);
+            canvas.Children.Add(new Line { X1 = left, X2 = right, Y1 = Y(pct), Y2 = Y(pct), Stroke = grid, StrokeThickness = pct == 0 ? 1.5 : 0.5 });
+            var t = Label($"{pct}%");
+            t.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+            Canvas.SetLeft(t, left - 6 - t.DesiredSize.Width);
+            Canvas.SetTop(t, Y(pct) - t.DesiredSize.Height / 2);
+            canvas.Children.Add(t);
+        }
+        // Temperature axis (x): gridline every 10 °C, label every 20 °C (every 10 °C when there's room).
+        double labelStep = w >= 420 ? 10 : 20;
+        for (double c = FanChartMinC; c <= FanChartMaxC; c += 10)
+        {
+            canvas.Children.Add(new Line { X1 = X(c), X2 = X(c), Y1 = top, Y2 = bottom, Stroke = grid, StrokeThickness = c == FanChartMinC ? 1.5 : 0.5 });
+            if ((c - FanChartMinC) % labelStep != 0) continue;
+            var t = Label($"{c:F0}");
+            t.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+            Canvas.SetLeft(t, X(c) - t.DesiredSize.Width / 2);
+            Canvas.SetTop(t, bottom + 3);
+            canvas.Children.Add(t);
+        }
+        // Axis titles.
+        var axisSource = o.Mode == FanMode.Auto ? FanSource.Core : o.Source;
+        var xTitle = Label($"{FanOptions.SourceName(axisSource) switch { "core" => "GPU core", "hottest" => "Hottest sensor", var n => char.ToUpper(n[0]) + n[1..] }} temperature (°C)", 12);
+        xTitle.Foreground = axis;
+        xTitle.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+        Canvas.SetLeft(xTitle, left + (w - xTitle.DesiredSize.Width) / 2);
+        Canvas.SetTop(xTitle, bottom + 18);
+        canvas.Children.Add(xTitle);
+        var yTitle = Label("Fan speed (%)", 12);
+        yTitle.Foreground = axis;
+        yTitle.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+        yTitle.RenderTransform = new RotateTransform { Angle = -90 };
+        Canvas.SetLeft(yTitle, 0);
+        Canvas.SetTop(yTitle, top + (h + yTitle.DesiredSize.Width) / 2);
+        canvas.Children.Add(yTitle);
+
+        // The x axis is the curve's input; the core failsafe line only lines up when that's the core.
+        double? failsafeC = o.Source == FanSource.Core ? o.FailsafeTempC
+                          : o.Source == FanSource.Hotspot ? o.FailsafeHotspotC
+                          : o.Source == FanSource.Memory ? o.FailsafeMemoryC : null;
+        if (o.Mode != FanMode.Auto && failsafeC is double fs)
+            canvas.Children.Add(new Line
+            {
+                X1 = X(fs), X2 = X(fs), Y1 = top, Y2 = bottom,
+                Stroke = Theme.Critical, StrokeThickness = 1, StrokeDashArray = [4, 4],
+            });
+
+        if (o.Mode == FanMode.Curve && o.ZeroRpm)
+        {
+            // Below this the driver has the fans and may stop them.
+            var zone = new Rectangle { Width = Math.Max(0, X(o.ZeroRpmBelowC) - left), Height = h, Fill = Theme.Muted, Opacity = 0.15 };
+            Canvas.SetLeft(zone, left);
+            Canvas.SetTop(zone, top);
+            canvas.Children.Add(zone);
+            var t = new TextBlock { Text = "0 RPM", FontSize = 11, Foreground = label };
+            Canvas.SetLeft(t, left + 4);
+            Canvas.SetTop(t, top + 2);
             canvas.Children.Add(t);
         }
 
-        // Failsafe: every manual mode runs at 100% from here.
-        canvas.Children.Add(new Line
+        if (o.Mode != FanMode.Auto)
         {
-            X1 = X(o.FailsafeTempC), X2 = X(o.FailsafeTempC), Y1 = 0, Y2 = h,
-            Stroke = Theme.Critical, StrokeThickness = 1, StrokeDashArray = [4, 4],
-        });
-
-        bool active = o.Mode != FanMode.Auto;
-        var line = new Polyline { Stroke = active ? Theme.Info : Theme.Muted, StrokeThickness = 2, StrokeLineJoin = PenLineJoin.Round };
-        for (double c = FanChartMinC; c <= FanChartMaxC; c += 0.5)
-        {
-            double pct = c >= o.FailsafeTempC ? 100 : o.Mode == FanMode.Fixed ? o.FixedPercent : o.CurvePercent(c);
-            line.Points.Add(new Point(X(c), Y(pct)));
+            var preview = o with { Curve = curve };
+            var line = new Polyline { Stroke = Theme.Info, StrokeThickness = 2, StrokeLineJoin = PenLineJoin.Round };
+            for (double c = FanChartMinC; c <= FanChartMaxC; c += 0.5)
+            {
+                double pct = failsafeC is double f && c >= f ? 100 : o.Mode == FanMode.Fixed ? o.FixedPercent : preview.CurvePercent(c);
+                line.Points.Add(new Point(X(c), Y(pct)));
+            }
+            canvas.Children.Add(line);
         }
-        canvas.Children.Add(line);
+        else
+        {
+            var t = new TextBlock
+            {
+                Text = o.AutoAssist
+                    ? $"Driver's curve. Safety net steps in at hotspot {o.AssistHotspotC:F0} °C, memory {o.AssistMemoryC:F0} °C, or hotspot {o.AssistGapC:F0} °C above core."
+                    : "Driver's curve. ReTweak doesn't touch the fans.",
+                FontSize = 11, Foreground = label, TextWrapping = TextWrapping.Wrap, Width = Math.Max(0, w - 8),
+            };
+            Canvas.SetLeft(t, left + 4);
+            Canvas.SetTop(t, top + 2);
+            canvas.Children.Add(t);
+        }
 
         if (o.Mode == FanMode.Curve)
-            foreach (var p in o.Curve)
-                canvas.Children.Add(Dot(X(p.TempC), Y(p.Percent), 6, Theme.Info));
+            for (int i = 0; i < curve.Count; i++)
+            {
+                bool dragging = i == _dragIndex;
+                canvas.Children.Add(Dot(X(curve[i].TempC), Y(curve[i].Percent), dragging ? 12 : 9, Theme.Info));
+                if (dragging)
+                {
+                    var tag = new TextBlock { Text = $"{curve[i].TempC:F0} °C · {curve[i].Percent}%", FontSize = 12, Foreground = label };
+                    Canvas.SetLeft(tag, Math.Clamp(X(curve[i].TempC) + 8, left, Math.Max(left, right - 90)));
+                    Canvas.SetTop(tag, Math.Clamp(Y(curve[i].Percent) - 22, top, bottom));
+                    canvas.Children.Add(tag);
+                }
+            }
 
-        if (ViewModel.FanTempC is double now)
-        {
-            double pct = ViewModel.FanAppliedPercent ?? ViewModel.CurrentFanPercent ?? 0;
-            canvas.Children.Add(Dot(X(now), Y(pct), 10, active ? Theme.Ok : Theme.Muted));
-        }
+        _fanNowDot = Dot(0, 0, 10, Theme.Muted);
+        canvas.Children.Add(_fanNowDot);
+        PlaceNowDot(_fanNowDot, o);
+    }
+
+    /// <summary>Moves the live dot to the current temperature and fan speed.</summary>
+    private void PlaceNowDot(Ellipse dot, FanOptions o)
+    {
+        if (ViewModel.FanTempC is not double now) { dot.Visibility = Visibility.Collapsed; return; }
+        double pct = ViewModel.FanAppliedPercent ?? ViewModel.CurrentFanPercent ?? 0;
+        dot.Visibility = Visibility.Visible;
+        dot.Fill = o.Mode != FanMode.Auto || ViewModel.FanAppliedPercent is not null ? Theme.Ok : Theme.Muted;
+        Canvas.SetLeft(dot, FanX(now) - dot.Width / 2);
+        Canvas.SetTop(dot, FanY(pct) - dot.Height / 2);
     }
 
     private static Ellipse Dot(double x, double y, double size, Brush fill)
@@ -194,31 +371,50 @@ public sealed partial class MainWindow : Window
         Draw(VoltChart, ViewModel.VoltHistory, o.CriticalLowVolts - 0.2, 12.4, [o.WarnLowVolts, o.CriticalLowVolts]);
     }
 
-    private static void Draw(Canvas canvas, IReadOnlyList<double> data, double min, double max, double[] thresholds)
+    /// <summary>Elements of a history chart, created once per canvas and then only moved.</summary>
+    private sealed class HistoryChart(Line[] thresholds, Polyline line)
     {
-        canvas.Children.Clear();
+        public Line[] Thresholds { get; } = thresholds;
+        public Polyline Line { get; } = line;
+    }
+    private readonly Dictionary<Canvas, HistoryChart> _historyCharts = [];
+
+    private void Draw(Canvas canvas, IReadOnlyList<double> data, double min, double max, double[] thresholds)
+    {
         double w = canvas.ActualWidth, h = canvas.ActualHeight;
         if (w <= 0 || h <= 0) return;
+
+        if (!_historyCharts.TryGetValue(canvas, out var chart) || chart.Thresholds.Length != thresholds.Length)
+        {
+            canvas.Children.Clear();
+            var lines = thresholds.Select((_, i) => new Line
+            {
+                Stroke = i == 0 ? Theme.Warn : Theme.Critical,
+                StrokeThickness = 1,
+                StrokeDashArray = [4, 4],
+            }).ToArray();
+            var poly = new Polyline { Stroke = Theme.Info, StrokeThickness = 2, StrokeLineJoin = PenLineJoin.Round };
+            foreach (var l in lines) canvas.Children.Add(l);
+            canvas.Children.Add(poly);
+            _historyCharts[canvas] = chart = new HistoryChart(lines, poly);
+        }
 
         double Y(double v) => h - Math.Clamp((v - min) / (max - min), 0, 1) * h;
 
         for (int i = 0; i < thresholds.Length; i++)
         {
-            canvas.Children.Add(new Line
-            {
-                X1 = 0, X2 = w, Y1 = Y(thresholds[i]), Y2 = Y(thresholds[i]),
-                Stroke = i == 0 ? Theme.Warn : Theme.Critical,
-                StrokeThickness = 1,
-                StrokeDashArray = [4, 4],
-            });
+            var l = chart.Thresholds[i];
+            (l.X1, l.X2, l.Y1, l.Y2) = (0, w, Y(thresholds[i]), Y(thresholds[i]));
         }
 
-        if (data.Count < 2) return;
-        var line = new Polyline { Stroke = Theme.Info, StrokeThickness = 2, StrokeLineJoin = PenLineJoin.Round };
-        double step = w / (MainViewModel.HistoryLength - 1);
-        double x0 = w - (data.Count - 1) * step; // newest sample on the right edge
-        for (int i = 0; i < data.Count; i++)
-            line.Points.Add(new Point(x0 + i * step, Y(data[i])));
-        canvas.Children.Add(line);
+        var points = new PointCollection();
+        if (data.Count >= 2)
+        {
+            double step = w / (MainViewModel.HistoryLength - 1);
+            double x0 = w - (data.Count - 1) * step; // newest sample on the right edge
+            for (int i = 0; i < data.Count; i++)
+                points.Add(new Point(x0 + i * step, Y(data[i])));
+        }
+        chart.Line.Points = points; // one property change instead of a new element
     }
 }

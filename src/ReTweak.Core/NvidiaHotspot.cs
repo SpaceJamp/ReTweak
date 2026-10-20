@@ -20,17 +20,21 @@ public enum HotspotAvailability
 /// <summary>
 /// GPU hotspot on Blackwell (RTX 50), which NVIDIA's driver APIs no longer report.
 ///
-/// Read from GPU register BAR0 + 0xAD0A90 via PawnIO's signed NVIDIA module, the same
-/// register HWMonitor 1.65.1+ shows as "Hot Spot" (found by disassembling HWMonitor 1.68;
-/// see docs/power-detector.md, "Hotspot"). Bit 30 marks a valid sample; the low 16 bits
-/// are 1/256 °C. The register sits after five more thermal channels that are read but
-/// not shown. Read-only.
+/// Read from six GPU registers at BAR0 + 0xAD0A90 via PawnIO's signed NVIDIA module (found by
+/// disassembling HWMonitor 1.68; see docs/power-detector.md, "Hotspot"). Bit 30 marks a valid
+/// sample; the low 16 bits are 1/256 °C. Channels #1-#4 are individual sensors and #5
+/// (0xAD0AA0) is exactly their maximum in every one of 2,889 reads: that's the hotspot.
+/// HWMonitor shows #1 as "Hot Spot", which reads low whenever another sensor is hotter.
+/// Read-only.
 /// </summary>
 public sealed class NvidiaHotspot : IDisposable
 {
     private const string ModuleResource = "ReTweak.Core.PawnIo.Nvidia.bin";
     private const string ReadFunction = "ioctl_read_thermal_registers";
     public const int ChannelCount = 6;
+    /// <summary>Index of the channel that is the maximum of the four sensors (#5).</summary>
+    public const int HotspotChannel = 4;
+    private const int SensorChannels = 4;
     private const long ValidBit = 1L << 30;
 
     private readonly PawnIo _pawnIo;
@@ -64,23 +68,26 @@ public sealed class NvidiaHotspot : IDisposable
             reason = "this GPU doesn't expose the register (GB202-GB207 only)";
             return null;
         }
-        if (Decode(channels[0]) is null)
-        {
-            hotspot.Dispose();
-            availability = HotspotAvailability.Unsupported;
-            reason = "the hotspot register isn't reporting";
-            return null;
-        }
+        // The register answered. A sample without the valid bit (just after boot or a power-state change)
+        // isn't a reason to give up for the session; the sampler skips invalid samples.
+        _ = channels;
         reason = "";
         return hotspot;
     }
 
-    /// <summary>Hotspot in °C, or null if this read failed or wasn't valid.</summary>
-    public double? Read() => ReadChannels() is { } c ? Decode(c[0]) : null;
+    /// <summary>All six channels in °C (see <see cref="Hotspot"/>); null entries weren't valid. Null if the read failed.</summary>
+    public double?[]? Read() => ReadChannels() is { } c ? Array.ConvertAll(c, Decode) : null;
 
     /// <summary>All six raw thermal channels, or null if the read failed.</summary>
     public long[]? ReadChannels() =>
         _pawnIo.Execute(ReadFunction, _pciAddress, ChannelCount) is { Length: ChannelCount } c ? c : null;
+
+    /// <summary>
+    /// The hotspot from one read: channel #5, or the hottest of sensors #1-#4 if #5 wasn't valid.
+    /// </summary>
+    public static double? Hotspot(IReadOnlyList<double?> channels) =>
+        channels.Count > HotspotChannel && channels[HotspotChannel] is double h ? h
+        : channels.Take(SensorChannels).Max();
 
     /// <summary>Raw channel to °C; null when the valid bit is clear or the value is implausible.</summary>
     public static double? Decode(long raw)
