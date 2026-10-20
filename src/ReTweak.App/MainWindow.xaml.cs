@@ -49,6 +49,9 @@ public sealed partial class MainWindow : Window
     }
 
     public static Visibility Not(bool value) => value ? Visibility.Collapsed : Visibility.Visible;
+    /// <summary>Column widths of a 0-100 % bar: the filled part and the rest.</summary>
+    public static GridLength Filled(double percent) => new(Math.Clamp(percent, 0, 100), GridUnitType.Star);
+    public static GridLength Unfilled(double percent) => new(100 - Math.Clamp(percent, 0, 100), GridUnitType.Star);
 
     [System.Runtime.InteropServices.DllImport("user32.dll")]
     private static extern uint GetDpiForWindow(nint hwnd);

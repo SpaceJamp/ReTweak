@@ -132,14 +132,28 @@
                                 <TextBlock Text="{x:Bind ViewModel.PowerLimit, Mode=OneWay}" VerticalAlignment="Bottom" Margin="0,0,0,3"
                                            Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                             </StackPanel>
-                            <ProgressBar Value="{x:Bind ViewModel.PowerPercent, Mode=OneWay}" Maximum="100" Margin="0,8,0,0" />
+                            <!-- Not a ProgressBar: every Value change runs its animation, which cost ~7% of a core at 1 Hz. -->
+                            <Grid Height="4" CornerRadius="2" Margin="0,8,0,0" Background="{ThemeResource ControlStrongFillColorDisabledBrush}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="{x:Bind local:MainWindow.Filled(ViewModel.PowerPercent), Mode=OneWay}" />
+                                    <ColumnDefinition Width="{x:Bind local:MainWindow.Unfilled(ViewModel.PowerPercent), Mode=OneWay}" />
+                                </Grid.ColumnDefinitions>
+                                <Border CornerRadius="2" Background="{ThemeResource AccentFillColorDefaultBrush}" />
+                            </Grid>
                         </StackPanel>
                     </Border>
                     <Border Grid.Row="1" Grid.Column="4" Style="{StaticResource Card}">
                         <StackPanel>
                             <TextBlock Text="VRAM" Style="{StaticResource TileLabel}" />
                             <TextBlock Text="{x:Bind ViewModel.Vram, Mode=OneWay}" Style="{StaticResource TileValue}" />
-                            <ProgressBar Value="{x:Bind ViewModel.VramPercent, Mode=OneWay}" Maximum="100" Margin="0,8,0,0" />
+                            <!-- Not a ProgressBar: every Value change runs its animation, which cost ~7% of a core at 1 Hz. -->
+                            <Grid Height="4" CornerRadius="2" Margin="0,8,0,0" Background="{ThemeResource ControlStrongFillColorDisabledBrush}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="{x:Bind local:MainWindow.Filled(ViewModel.VramPercent), Mode=OneWay}" />
+                                    <ColumnDefinition Width="{x:Bind local:MainWindow.Unfilled(ViewModel.VramPercent), Mode=OneWay}" />
+                                </Grid.ColumnDefinitions>
+                                <Border CornerRadius="2" Background="{ThemeResource AccentFillColorDefaultBrush}" />
+                            </Grid>
                         </StackPanel>
                     </Border>
                 </Grid>
