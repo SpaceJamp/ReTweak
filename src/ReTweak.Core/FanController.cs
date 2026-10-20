@@ -88,8 +88,13 @@ public sealed record FanOptions
     /// </summary>
     public double CeilingC { get; init; } = 80;
     public SmartPriority SmartPriority { get; init; } = SmartPriority.Balanced;
-    /// <summary>Hand the fans to the driver well below the target at low load, so they can stop (0 RPM).</summary>
+    /// <summary>
+    /// Auto's 0 RPM: at light load (idle, desktop, video; under 25% power) and below
+    /// <see cref="SmartIdleStopBelowC"/>, hand the fans to the driver so they can stop.
+    /// </summary>
     public bool SmartIdleStop { get; init; }
+    /// <summary>Auto's 0 RPM threshold on the hotspot (8 °C lower on the core without one). Fans return 5 °C above it.</summary>
+    public double SmartIdleStopBelowC { get; init; } = 50;
 
     /// <summary>Auto picks a target and style for what you're doing (<see cref="Activities"/>).</summary>
     public bool AdaptToActivity { get; init; } = true;
@@ -152,6 +157,7 @@ public sealed record FanOptions
             _ => FailsafeTempC,
         };
         if (ZeroRpm && ZeroRpmBelowC >= sourceFailsafe) return "Zero RPM threshold must be below the failsafe for the curve's input.";
+        if (SmartIdleStopBelowC is < 25 or > 70) return "Auto's 0 RPM threshold must be 25-70 °C.";
         if (RampUpPerSecond is < 0 or > 100 || RampDownPerSecond is < 0 or > 100) return "Ramp rates must be 0-100 %/s.";
         if (SmoothingSeconds is < 0 or > 30) return "Temperature smoothing must be 0-30 s.";
         // A failsafe at or below a safety-net threshold is fine: full speed simply arrives first.
@@ -258,6 +264,7 @@ public sealed class FanController : IDisposable
     private TimeSpan? _coolSince;
     private double _integral;        // Smart: accumulated correction, % fan
     private bool _smartRunning, _smartIdle;
+    private TimeSpan? _idleExitAt;
     private string? _smartInput;     // "hotspot" or "core": switching resets the controller
     private object? _lastSmart;      // this tick's controller terms, for the diagnostic log
     private readonly ActivityClassifier _activity = new();
@@ -471,15 +478,28 @@ public sealed class FanController : IDisposable
         _leadHold = Math.Max(projected, Math.Max(power, _leadHold - 0.02 * dt));
         double predicted = _leadHold;
 
-        bool idleAllowed = activity is ActivityKind.Idle or ActivityKind.Unknown;
-        if (o.SmartIdleStop && failsafe is null && idleAllowed)
+        // 0 RPM: an absolute threshold, like the curve's, rather than a distance below the target. The old rule
+        // (20 °C under target, under 15% power, idle only) never engaged on an RTX 5080 Astral: it idles at
+        // ~60 W (16% of its limit) with the hotspot ~40 °C, and the desktop counts as its own activity.
+        // Leaves 5 °C above the threshold, at 30% power, when another sensor nears its target, or on a game.
+        bool lightActivity = activity is ActivityKind.Idle or ActivityKind.Desktop or ActivityKind.Video or ActivityKind.Unknown;
+        if (o.SmartIdleStop && failsafe is null && lightActivity)
         {
-            _smartIdle = _smartIdle ? !(error > -15 || power >= 0.25) : error < -20 && power < 0.15;
+            double stopBelow = input == "hotspot" ? o.SmartIdleStopBelowC : o.SmartIdleStopBelowC - 8;
+            double others = votes.Skip(1).Select(v => v.Error).DefaultIfEmpty(double.MinValue).Max();
+            // Once the fans come back they run at least a minute, so a card that idles near the threshold
+            // cycles slowly instead of stopping and starting every few seconds.
+            var now = _clock();
+            bool wasIdle = _smartIdle;
+            _smartIdle = _smartIdle
+                ? temp < stopBelow + 5 && power < 0.30 && others < -5
+                : temp < stopBelow && power < 0.25 && others < -10 && !(now - _idleExitAt < TimeSpan.FromSeconds(60));
+            if (wasIdle && !_smartIdle) _idleExitAt = now;
             if (_smartIdle)
             {
                 _smartRunning = false;
                 Release();
-                return Status = new(FanMode.Smart, null, $"Auto · idle, driver can stop the fans ({input} {temp:F0} °C)", SourceTempC: temp,
+                return Status = new(FanMode.Smart, null, $"Auto · 0 RPM, driver can stop the fans ({input} {temp:F0} °C, back on at {stopBelow + 5:F0} °C)", SourceTempC: temp,
                                     Activity: activity);
             }
         }

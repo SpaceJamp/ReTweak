@@ -205,7 +205,8 @@ public sealed class GpuMonitor : IDisposable
             hotspot?.MaxC,
             decoder,
             encoder,
-            d.Hotspot?.MemoryChips());
+            d.Hotspot?.MemoryChips(),
+            hotspot?.SpreadC);
         if (Diag.IsOn(DiagLevel.Debug)) LogSnapshot(snapshot, hotspot?.Samples);
         return snapshot;
     }
@@ -220,6 +221,8 @@ public sealed class GpuMonitor : IDisposable
         hotspotMaxC = s.HotspotMaxC,
         hotspotSamples,
         thermalChannelsC = s.ThermalChannels,
+        hotspotSpreadC = s.HotspotSpreadC,
+        dieAverageC = s.DieAverageC,
         memoryChipsC = s.MemoryChipsC,
         decoderPct = s.DecoderUtilization,
         encoderPct = s.EncoderUtilization,

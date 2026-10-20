@@ -293,10 +293,12 @@ public sealed partial class MainWindow : Window
                 Stroke = Theme.Critical, StrokeThickness = 1, StrokeDashArray = [4, 4],
             });
 
-        if (o.Mode == FanMode.Curve && o.ZeroRpm)
+        double? zeroBelow = o.Mode == FanMode.Curve && o.ZeroRpm ? o.ZeroRpmBelowC
+                          : o.Mode == FanMode.Smart && o.SmartIdleStop ? o.SmartIdleStopBelowC : null;
+        if (zeroBelow is double zb)
         {
-            // Below this the driver has the fans and may stop them.
-            var zone = new Rectangle { Width = Math.Max(0, X(o.ZeroRpmBelowC) - left), Height = h, Fill = Theme.Muted, Opacity = 0.15 };
+            // Below this the driver has the fans and may stop them (Auto: at light load only).
+            var zone = new Rectangle { Width = Math.Max(0, X(zb) - left), Height = h, Fill = Theme.Muted, Opacity = 0.15 };
             Canvas.SetLeft(zone, left);
             Canvas.SetTop(zone, top);
             canvas.Children.Add(zone);

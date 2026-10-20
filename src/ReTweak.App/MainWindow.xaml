@@ -122,6 +122,9 @@
                             <TextBlock Text="{x:Bind ViewModel.HotspotChannels, Mode=OneWay}" TextWrapping="Wrap"
                                        ToolTipService.ToolTip="The GPU's four thermal sensors; the hotspot is the hottest of them (register #5). HWMonitor's Hot Spot is sensor #1 only."
                                        Style="{StaticResource CaptionTextBlockStyle}" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                            <TextBlock Text="{x:Bind ViewModel.HotspotSpread, Mode=OneWay}" TextWrapping="Wrap"
+                                       ToolTipService.ToolTip="Die spread: the hotspot minus the coolest of the four sensors. It grows with power (on an RTX 5080 about 4 °C at idle, 25-32 °C at full load); far more than that points to poor cooler contact. Die average: NVIDIA's own average of the die (register #6)."
+                                       Style="{StaticResource CaptionTextBlockStyle}" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
                             <HyperlinkButton Content="Get PawnIO" Padding="0" Margin="0,2,0,0" Click="GetPawnIo_Click"
                                              Visibility="{x:Bind ViewModel.OfferPawnIo}" />
                         </StackPanel>

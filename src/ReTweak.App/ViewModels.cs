@@ -94,6 +94,8 @@ public sealed partial class MainViewModel : Observable, IDisposable
     public string HotspotPeak { get => _hotspotPeak; private set => Set(ref _hotspotPeak, value); }
     /// <summary>The four GPU thermal sensors the hotspot is the maximum of.</summary>
     public string HotspotChannels { get => _hotspotChannels; private set => Set(ref _hotspotChannels, value); }
+    private string _hotspotSpread = "";
+    public string HotspotSpread { get => _hotspotSpread; private set => Set(ref _hotspotSpread, value); }
     /// <summary>Where the hotspot comes from, or what the user can do to get one.</summary>
     public string HotspotNote { get; }
     /// <summary>Show the "Get PawnIO" link: an RTX 50 card without the optional driver.</summary>
@@ -294,6 +296,9 @@ public sealed partial class MainViewModel : Observable, IDisposable
         HotspotPeak = s.HotspotMaxC is double hm ? $"1 s average · peak {hm:F1} °C" : "";
         HotspotChannels = s.ThermalChannels is { } ch
             ? "Sensors " + string.Join("  ", ch.Take(4).Select((c, i) => $"#{i + 1} {(c is double v ? $"{v:F1}" : "-")}"))
+            : "";
+        HotspotSpread = s.HotspotSpreadC is double sp
+            ? $"Die spread {sp:F1} °C" + (s.DieAverageC is double da ? $" · die average {da:F1} °C" : "")
             : "";
         MemoryTempSource = s.MemoryTempSource is { } src ? $"from {src}" : "";
         if (s.BoardTemps is { } board)

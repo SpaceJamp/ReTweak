@@ -112,7 +112,8 @@ do
                           (s.MemoryTempC is double mt ? $"  memory {mt:F1}°C ({s.MemoryTempSource})" : "") +
                           $"  core clock {s.CoreClockMhz} MHz  mem clock {s.MemoryClockMhz} MHz  load {s.GpuUtilization}%");
         if (s.ThermalChannels is { } ch)
-            Console.WriteLine("    gpu thermal channels: " + string.Join("  ", ch.Select((c, i) => $"#{i + 1} {(c is double v ? $"{v:F1}°C" : "-")}")) + "  (#5 = max of #1-#4 = hotspot)");
+            Console.WriteLine("    gpu thermal channels: " + string.Join("  ", ch.Select((c, i) => $"#{i + 1} {(c is double v ? $"{v:F1}°C" : "-")}")) + "  (#5 = max of #1-#4 = hotspot, #6 = die average)" +
+                              (s.HotspotSpreadC is double sp ? $"  die spread {sp:F1}°C" : ""));
         if (s.BoardTemps is { } board)
             Console.WriteLine("    board: " + string.Join("  ", board.Select(b => $"{b.Name} {(b.Celsius is double c ? $"{c:F1}°C" : "-")}")));
         Console.WriteLine($"    power {s.PowerWatts:F1} / {s.PowerLimitWatts:F0} W  fans {string.Join(", ", s.FanPercents.Select(f => $"{f}%"))}");

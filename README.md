@@ -8,17 +8,21 @@ going wrong.
 
 - GPU stats on any NVIDIA card through NVML (temperature, clocks, load, board power, fans, VRAM)
 - **Per-pin voltage and current** on ASUS cards with Power Detector+ (e.g. ROG Astral), read directly from the card's monitor chip; see [docs/power-detector.md](docs/power-detector.md)
-- **GPU hotspot on RTX 50**, optional: needs the PawnIO driver (see [below](#gpu-hotspot-and-pawnio))
+- **GPU hotspot on RTX 50**, optional: needs the PawnIO driver (see [below](#gpu-hotspot-and-pawnio)). Also the
+  die spread (hotspot minus the coolest of the four die sensors, a cooler-contact check) and NVIDIA's die average.
+  A read whose maximum is below its coolest sensor is thrown away.
 - **Temperatures**: precise core (0.01 °C) and memory on RTX 50; on ASUS cards, memory comes from the
   board sensors GPU Tweak III uses, plus 8 board sensors (VRM, core, memory and more)
-- **Early-warning alerts**: pin over-current, low/high voltage, pin-to-pin voltage spread, current imbalance, fast voltage drops or current ramps, frozen sensor, high core, memory or hotspot temperature
+- **Early-warning alerts**: pin over-current, low/high voltage, pin-to-pin voltage spread, current imbalance, fast voltage drops or current ramps, frozen sensor, high core, memory or hotspot temperature, high die spread (40 / 50 °C by default; a healthy RTX 5080 shows ~4 °C at idle and up to ~32 °C at full load)
 - **Fan control**: **Auto** is ReTweak's own controller. It works out what you're doing (idle, desktop,
   video, gaming, rendering/AI/encoding) from GPU, video-engine and memory load, how power swings and the
   foreground app, and holds a target per activity (60-70 °C hotspot by default) under an **80 °C ceiling**.
   Every sensor votes against its own limit (hotspot and its 4 sensors, core, memory or each memory chip,
   ASUS VRMs) and the one closest to its limit sets the speed; a rising load is projected a few seconds
   ahead, and it learns how much airflow your card needs at each power level. With PawnIO it sees the
-  hotspot and per-chip memory temperatures too. Also: Driver (the card's own curve) with a safety net, a fixed speed, or a 5-point curve (drag the points
+  hotspot and per-chip memory temperatures too. Optional 0 RPM in Auto: at light load (idle, desktop, video,
+  under 25% power) and below a hotspot temperature you choose, the driver gets the fans so they can stop; they
+  come back 5 °C higher and then run at least a minute. Also: Driver (the card's own curve) with a safety net, a fixed speed, or a 5-point curve (drag the points
   on the dashboard, or pick Quiet / Balanced / Performance). The curve can follow the core, hotspot,
   memory or the hottest of them; speed changes are ramped and the temperature averaged so the fans don't
   step on short spikes; optional 0 RPM below a temperature you choose. Full speed at a core, hotspot or
