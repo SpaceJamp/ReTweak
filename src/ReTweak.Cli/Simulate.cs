@@ -51,6 +51,7 @@ static class Simulate
 
         StaleCheck();
         TempCheck();
+        FanCheck();
 
         Console.WriteLine(_failures == 0 ? "\nAll scenarios passed." : $"\n{_failures} scenario(s) FAILED.");
         return _failures;
@@ -181,6 +182,112 @@ static class Simulate
         for (t = 0; t <= 10; t++) quiet.ProcessGpu(Snap(60, t == 5 ? 101 : 70));
         if (raised != 0) _failures++;
         Console.WriteLine($"  {(raised == 0 ? "PASS" : "FAIL")}: {raised} alert(s)");
+    }
+
+    /// <summary>A fake card for <see cref="FanController"/>: records writes, can refuse them or be overridden.</summary>
+    private sealed class FakeFans
+    {
+        public int? Speed;            // null = driver's automatic curve
+        public int Writes, Restores;
+        public string? Refuse;
+        public int? ForeignTarget;    // another program's speed, if one is fighting
+        public FanController Make(FanOptions o, (int, int)? range = null) => new(
+            p => { Writes++; if (Refuse is not null) return Refuse; Speed = p; return null; },
+            () => { Restores++; Speed = null; return null; },
+            () => ForeignTarget ?? Speed, range ?? (0, 100)) { Options = o };
+    }
+
+    private static void Check(string name, bool pass, string detail)
+    {
+        if (!pass) _failures++;
+        Console.WriteLine($"\n== {name}\n  {(pass ? "PASS" : "FAIL")}: {detail}");
+    }
+
+    private static void FanCheck()
+    {
+        var curve = new FanOptions { Mode = FanMode.Curve }; // 40/30 55/40 65/55 75/75 83/100, 3 °C hysteresis
+
+        var fake = new FakeFans();
+        using (var fc = fake.Make(curve))
+        {
+            var up = Enumerable.Range(40, 41).Select(t => { fc.Tick(t); return fake.Speed ?? -1; }).ToList();
+            bool rising = up.Zip(up.Skip(1)).All(x => x.Second >= x.First);
+            Check("Fan curve: core 40 -> 80 °C", rising && up[0] == 30 && up[25] == 55 && up[40] == 91,
+                  $"speeds never drop, 30% at 40 °C ({up[0]}), 55% at 65 °C ({up[25]}), 91% at 80 °C ({up[40]})");
+
+            fc.Tick(70);
+            int at70 = fake.Speed ?? -1;
+            int writes = fake.Writes;
+            for (int i = 0; i < 20; i++) fc.Tick(i % 2 == 0 ? 69 : 71); // ±1 °C wobble
+            Check("Fan curve: core wobbles 69/71 °C after cooling from 80 °C", fake.Writes - writes <= 1,
+                  $"{fake.Writes - writes} speed change(s) in 20 s with hysteresis (held {at70}%)");
+
+            fc.Tick(60);
+            Check("Fan curve: core cools to 60 °C", fake.Speed is >= 47 and <= 55,
+                  $"stepped down to {fake.Speed}% (curve says 48% at 60 °C, 55% at 63 °C)");
+        }
+        Check("Fan control: dispose", fake.Speed is null && fake.Restores == 1, $"driver back in charge, {fake.Restores} restore(s)");
+
+        fake = new FakeFans();
+        using (var fc = fake.Make(new FanOptions { Mode = FanMode.Fixed, FixedPercent = 35 }))
+        {
+            fc.Tick(60);
+            int before = fake.Speed ?? -1;
+            var st = fc.Tick(90);
+            Check("Fixed 35% when core hits 90 °C (failsafe 88 °C)", before == 35 && fake.Speed == 100 && st.Severity == AlertSeverity.Warning,
+                  $"{before}% -> {fake.Speed}% : {st.Text}");
+        }
+
+        fake = new FakeFans();
+        using (var fc = fake.Make(curve))
+        {
+            fc.Tick(60);
+            var st = fc.Status;
+            for (int i = 0; i < FanController.MissedTempsBeforeRelease; i++) st = fc.Tick(null);
+            Check("Temperature reading lost for 3 s", fake.Speed is null && fake.Restores == 1, st.Text);
+            fc.Tick(60);
+            Check("Temperature reading back", fake.Speed == 48, $"curve resumed at {fake.Speed}%");
+        }
+
+        fake = new FakeFans { Refuse = "needs administrator rights" };
+        using (var fc = fake.Make(curve))
+        {
+            var st = fc.Tick(60);
+            for (int i = 0; i < 5; i++) st = fc.Tick(60);
+            Check("Not running as administrator", st.NeedsAdmin && fake.Writes == 1 && fake.Restores == 1 && fake.Speed is null,
+                  $"{fake.Writes} write attempt(s), fans on automatic: {st.Text}");
+        }
+
+        fake = new FakeFans();
+        using (var fc = fake.Make(curve with { Curve = [new(40, 0), new(80, 100)] }, range: (30, 100)))
+        {
+            fc.Tick(40);
+            Check("Curve asks 0% but the driver's minimum is 30%", fake.Speed == 30, $"set {fake.Speed}%");
+        }
+
+        fake = new FakeFans();
+        using (var fc = fake.Make(curve))
+        {
+            fc.Tick(60);
+            fc.Options = curve with { Mode = FanMode.Auto };
+            fc.Tick(60);
+            fc.Tick(60);
+            Check("Switch Curve -> Auto", fake.Speed is null && fake.Restores == 1 && fake.Writes == 1,
+                  $"{fake.Restores} restore(s), no further writes ({fake.Writes} total)");
+        }
+
+        fake = new FakeFans();
+        using (var fc = fake.Make(curve))
+        {
+            fc.Tick(60);
+            fake.ForeignTarget = 80; // e.g. GPU Tweak III's fan service still running
+            var st = fc.Status;
+            for (int i = 0; i < 4; i++) st = fc.Tick(60);
+            Check("Another program keeps setting 80%", st.Severity == AlertSeverity.Warning && fake.Speed == 48, st.Text);
+        }
+
+        var bad = new FanOptions { Curve = [new(60, 50), new(50, 60)] }.Validate();
+        Check("Curve with falling temperatures is rejected", bad is not null, bad ?? "accepted");
     }
 
     private static ConnectorReading Pins(Func<int, double> v, Func<int, double> a) =>

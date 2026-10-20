@@ -76,6 +76,60 @@ internal static class SettingsDialog
             memWarn.Value = d.WarnMemoryTempC; memCrit.Value = d.CriticalMemoryTempC;
         };
 
+        // Fan control
+        var f = current.Fans;
+        var fanMode = new ComboBox { Header = "Fan mode", ItemsSource = new[] { "Auto (driver)", "Fixed speed", "Curve" }, SelectedIndex = (int)f.Mode, MinWidth = 200 };
+        var fanFixed = Num("Fixed fan speed (%)", f.FixedPercent);
+        var fanHyst = Num("Curve hysteresis (°C)", f.HysteresisC);
+        var fanFailsafe = Num("Full speed at or above (°C)", f.FailsafeTempC);
+        foreach (var n in new[] { fanFixed, fanFailsafe }) n.SmallChange = 1;
+        fanHyst.SmallChange = 0.5;
+
+        const int CurvePoints = 5;
+        var curveGrid = new Grid { ColumnSpacing = 12, RowSpacing = 8 };
+        curveGrid.ColumnDefinitions.Add(new ColumnDefinition());
+        curveGrid.ColumnDefinitions.Add(new ColumnDefinition());
+        var curveTemps = new NumberBox[CurvePoints];
+        var curvePcts = new NumberBox[CurvePoints];
+        void FillCurve(IReadOnlyList<FanPoint> pts)
+        {
+            for (int i = 0; i < CurvePoints; i++)
+            {
+                var p = pts[Math.Min(i, pts.Count - 1)]; // shorter saved curves: repeat the last point (rejected on save)
+                curveTemps[i].Value = p.TempC;
+                curvePcts[i].Value = p.Percent;
+            }
+        }
+        for (int i = 0; i < CurvePoints; i++)
+        {
+            curveGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            curveTemps[i] = Num($"Point {i + 1} · core °C", 0);
+            curvePcts[i] = Num($"Point {i + 1} · fan %", 0);
+            curveTemps[i].SmallChange = curvePcts[i].SmallChange = 1;
+            Grid.SetRow(curveTemps[i], i);
+            Grid.SetRow(curvePcts[i], i);
+            Grid.SetColumn(curvePcts[i], 1);
+            curveGrid.Children.Add(curveTemps[i]);
+            curveGrid.Children.Add(curvePcts[i]);
+        }
+        FillCurve(f.Curve.Count == CurvePoints ? f.Curve : new FanOptions().Curve);
+
+        var fanNote = new TextBlock
+        {
+            Text = "Fixed and Curve write to the card and need ReTweak to run as administrator. " +
+                   "Auto, closing ReTweak or losing the temperature reading hands the fans back to the driver. " +
+                   "Close GPU Tweak III and other fan tools first, or they'll fight over the fans.",
+            Style = (Style)Application.Current.Resources["CaptionTextBlockStyle"],
+            TextWrapping = TextWrapping.Wrap,
+        };
+        var fanReset = new HyperlinkButton { Content = "Reset fan settings to defaults" };
+        fanReset.Click += (_, _) =>
+        {
+            var d = new FanOptions();
+            fanFixed.Value = d.FixedPercent; fanHyst.Value = d.HysteresisC; fanFailsafe.Value = d.FailsafeTempC;
+            FillCurve(d.Curve);
+        };
+
         var error = new InfoBar { Severity = InfoBarSeverity.Error, IsClosable = false, IsOpen = false, Title = "Can't save" };
 
         TextBlock Section(string text) => new()
@@ -90,6 +144,7 @@ internal static class SettingsDialog
             error, Section("General"), autostart, tray, toasts,
             Section("Logging"), log, logFolder, logNote,
             Section("Alert thresholds"), grid, reset,
+            Section("Fan control"), fanNote, fanMode, fanFixed, curveGrid, fanHyst, fanFailsafe, fanReset,
         }) panel.Children.Add(e);
 
         var dialog = new ContentDialog
@@ -126,11 +181,24 @@ internal static class SettingsDialog
                 CriticalMemoryTempC = memCrit.Value,
             };
             problem ??= AppSettings.Validate(alerts);
+
+            var fanBoxes = curveTemps.Concat(curvePcts).Append(fanFixed).Append(fanHyst).Append(fanFailsafe);
+            if (problem is null && fanBoxes.Any(b => double.IsNaN(b.Value))) problem = "Every fan setting needs a number.";
+            var fans = current.Fans with
+            {
+                Mode = (FanMode)Math.Max(0, fanMode.SelectedIndex),
+                FixedPercent = (int)Math.Round(fanFixed.Value),
+                HysteresisC = fanHyst.Value,
+                FailsafeTempC = fanFailsafe.Value,
+                Curve = Enumerable.Range(0, CurvePoints).Select(i => new FanPoint(curveTemps[i].Value, (int)Math.Round(curvePcts[i].Value))).ToList(),
+            };
+            problem ??= fans.Validate();
             if (problem is null && log.IsOn && string.IsNullOrWhiteSpace(logFolder.Text)) problem = "Choose a log folder or turn logging off.";
 
             var updated = current with
             {
                 Alerts = alerts,
+                Fans = fans,
                 CloseToTray = tray.IsOn,
                 Toasts = toasts.IsOn,
                 LogConnector = log.IsOn,
