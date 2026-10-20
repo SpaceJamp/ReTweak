@@ -9,6 +9,9 @@ public partial class App : Application
     private Window? _window;
     // Held for the process lifetime: only one ReTweak should poll the sensor and own the tray icon.
     private static Mutex? _singleInstance;
+    // Held only by an elevated copy, so a second elevated launch can tell it isn't taking over a normal one.
+    private static Mutex? _elevatedInstance;
+    private const string InstanceName = @"Local\ReTweak.SingleInstance", ElevatedName = @"Local\ReTweak.ElevatedInstance";
 
     public App() => InitializeComponent();
 
@@ -16,9 +19,19 @@ public partial class App : Application
     {
         var cmdArgs = Environment.GetCommandLineArgs();
         bool first;
-        try { _singleInstance = new Mutex(initiallyOwned: true, @"Local\ReTweak.SingleInstance", out first); }
-        catch (UnauthorizedAccessException) { first = false; } // an elevated copy owns it
+        try { _singleInstance = new Mutex(initiallyOwned: true, InstanceName, out first); }
+        catch (UnauthorizedAccessException) { first = false; } // an elevated copy created it
+        // "Restart as administrator": the normal copy started this one and is exiting.
         if (!first && _singleInstance is not null && cmdArgs.Contains(Elevation.RestartArg)) first = WaitForPreviousInstance(_singleInstance);
+
+        if (Elevation.IsAdmin)
+        {
+            _elevatedInstance = new Mutex(initiallyOwned: true, ElevatedName, out bool firstElevated);
+            // Run as administrator while a normal copy runs: that copy can't read the hotspot or set fans, so take over.
+            if (!first && firstElevated && _singleInstance is not null && TrayIcon.AskRunningInstanceToExit())
+                first = WaitForPreviousInstance(_singleInstance);
+        }
+
         if (!first)
         {
             TrayIcon.SignalRunningInstance(); // bring the running copy to the front instead
@@ -42,7 +55,7 @@ public partial class App : Application
         if (!minimized) _window.Activate();
     }
 
-    /// <summary>The unelevated copy is exiting after starting this one; take over once it has.</summary>
+    /// <summary>A normal copy is exiting (asked to, or after starting this one); take its place once it has.</summary>
     private static bool WaitForPreviousInstance(Mutex mutex)
     {
         try { return mutex.WaitOne(TimeSpan.FromSeconds(10)); }

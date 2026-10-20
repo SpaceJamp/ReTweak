@@ -53,7 +53,8 @@ public sealed record GpuSnapshot(
     double? CoreTempPreciseC = null,
     double? MemoryTempC = null,
     IReadOnlyList<BoardTemp>? BoardTemps = null,
-    string? MemoryTempSource = null)
+    string? MemoryTempSource = null,
+    double? HotspotC = null)
 {
     /// <summary>Best available core temperature: the precise sensor if present, else NVML's integer value.</summary>
     public double? CoreTempC => CoreTempPreciseC ?? TemperatureC;

@@ -108,7 +108,17 @@
                             <TextBlock Text="{x:Bind ViewModel.MemoryClock, Mode=OneWay}" Style="{StaticResource TileValue}" />
                         </StackPanel>
                     </Border>
-                    <Border Grid.Row="1" Grid.ColumnSpan="3" Style="{StaticResource Card}">
+                    <Border Grid.Row="1" Grid.Column="2" Style="{StaticResource Card}" ToolTipService.ToolTip="{x:Bind ViewModel.HotspotHelp}">
+                        <StackPanel>
+                            <TextBlock Text="GPU hotspot" Style="{StaticResource TileLabel}" />
+                            <TextBlock Text="{x:Bind ViewModel.Hotspot, Mode=OneWay}" Style="{StaticResource TileValue}" />
+                            <TextBlock Text="{x:Bind ViewModel.HotspotNote}" TextWrapping="Wrap"
+                                       Style="{StaticResource CaptionTextBlockStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                            <HyperlinkButton Content="Get PawnIO" Padding="0" Margin="0,2,0,0" NavigateUri="https://pawnio.eu/"
+                                             Visibility="{x:Bind ViewModel.OfferPawnIo}" />
+                        </StackPanel>
+                    </Border>
+                    <Border Grid.Row="1" Grid.ColumnSpan="2" Style="{StaticResource Card}">
                         <StackPanel>
                             <TextBlock Text="Board power" Style="{StaticResource TileLabel}" />
                             <StackPanel Orientation="Horizontal" Spacing="8">

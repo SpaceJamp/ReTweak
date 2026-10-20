@@ -13,6 +13,8 @@ internal sealed partial class TrayIcon : IDisposable
     public const string WindowClass = "ReTweak.TrayWindow";
     /// <summary>Posted by a second instance to bring the running one to the front.</summary>
     public const uint WmShowRequest = WmApp + 2;
+    /// <summary>Sent by an elevated copy taking over from this (unelevated) one.</summary>
+    public const uint WmExitRequest = WmApp + 3;
 
     private const uint WmApp = 0x8000;
     private const uint WmTrayCallback = WmApp + 1;
@@ -52,6 +54,8 @@ internal sealed partial class TrayIcon : IDisposable
         // A real (never shown) top-level window, not HWND_MESSAGE: message-only windows
         // don't receive the TaskbarCreated broadcast, and the icon would vanish after an Explorer restart.
         _hwnd = CreateWindowEx(0, WindowClass, "ReTweak", 0, 0, 0, 0, 0, 0, 0, wc.hInstance, 0);
+        // When elevated, still let a normal copy ask us to show the window (UIPI blocks it otherwise).
+        ChangeWindowMessageFilterEx(_hwnd, WmShowRequest, MsgFltAllow, 0);
         _iconNormal = LoadTrayIcon("tray.ico");
         _iconWarning = LoadTrayIcon("tray-warning.ico");
         _iconCritical = LoadTrayIcon("tray-critical.ico");
@@ -116,6 +120,11 @@ internal sealed partial class TrayIcon : IDisposable
             OpenRequested?.Invoke();
             return 0;
         }
+        if (msg == WmExitRequest)
+        {
+            ExitRequested?.Invoke();
+            return 0;
+        }
         if (msg == WmTaskbarCreated && WmTaskbarCreated != 0)
         {
             Add(); // Explorer restarted: the shell forgot our icon
@@ -144,6 +153,13 @@ internal sealed partial class TrayIcon : IDisposable
     {
         var hwnd = FindWindow(WindowClass, null);
         return hwnd != 0 && PostMessage(hwnd, WmShowRequest, 0, 0);
+    }
+
+    /// <summary>Asks an already-running instance to exit. Returns false if none was found.</summary>
+    public static bool AskRunningInstanceToExit()
+    {
+        var hwnd = FindWindow(WindowClass, null);
+        return hwnd != 0 && PostMessage(hwnd, WmExitRequest, 0, 0);
     }
 
     public void Dispose()
@@ -202,6 +218,8 @@ internal sealed partial class TrayIcon : IDisposable
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern uint RegisterWindowMessage(string name);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern nint FindWindow(string cls, string? name);
     [DllImport("user32.dll")] private static extern bool PostMessage(nint hwnd, uint msg, nint wParam, nint lParam);
+    [DllImport("user32.dll")] private static extern bool ChangeWindowMessageFilterEx(nint hwnd, uint msg, uint action, nint changeInfo);
+    private const uint MsgFltAllow = 1;
     [DllImport("user32.dll")] private static extern nint LoadIcon(nint instance, nint name);
     private const uint ImageIcon = 1, LrLoadFromFile = 0x10;
     private const int SmCxSmIcon = 49;

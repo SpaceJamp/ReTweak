@@ -99,6 +99,25 @@ No hotspot reading is available through NVML or the NVAPI calls above on RTX 50.
 `research/thermal_probe.py` dumps the NVAPI slots and can log them under load;
 `research/asus_regs.py` dumps ASUS chip registers.
 
+## Hotspot on RTX 50 (2026-10-19)
+
+NVIDIA's driver APIs stopped reporting a hotspot on Blackwell. HWMonitor 1.65.1+ shows one
+anyway; disassembling HWMonitor 1.68 (x64, static only) shows how it finds temperatures:
+
+| HWMonitor sensor | Source |
+|---|---|
+| GPU, Hot Spot, Memory Junction (ids 1-3) | NVAPI `0x0BC8163D` (undocumented, v2, 0xAB0 bytes) describes the 32 `ThermalGetSensors` slots: entry *i* at `0x28 + i*0x54`, word 0 = class, word 1 = **type** (0 core, 1 hotspot, 3 memory). HWMonitor picks the slot by type instead of by index |
+| `[VRM #1]` ... `[TMP #8]` (ids 20-28) | The ASUS chip's eight board sensors at register `0x60` (address `0x2B`, the same reads ReTweak does), only on ASUS subsystems `89DE`, `89E3`, `89EA`, `89EC`, `8A61` |
+| **Hot Spot** (id 29), Channel #2-#4 (ids 30-32) | **GPU register BAR0 + `0xAD0A90`** (`+0x94`, `+0x98`, `+0x9C`) read through HWMonitor's kernel driver. Bit 30 = valid, low 16 bits = 1/256 °C |
+
+On the RTX 5080 Astral (driver 617.42) the type-1 NVAPI slot is empty (`0xFF00`), so only the
+register path gives a hotspot. It reads about 4 °C above the core at light load
+(HWMonitor: hotspot 38.0 / core 34.0; ReTweak: 40.6-41.9 / 37.0-38.0).
+
+ReTweak reads the register with PawnIO's signed NVIDIA module (`ioctl_read_thermal_registers`,
+GB202-GB207, BAR0 `0xAD0A90`, 24 bytes, read-only); see `src/ReTweak.Core/PawnIo/README.md`.
+That needs PawnIO installed and ReTweak running as administrator.
+
 ## Research tools
 
 In `research/` (Python, stdlib only except `dis32.py`, which needs `capstone`):
@@ -107,6 +126,8 @@ In `research/` (Python, stdlib only except `dis32.py`, which needs `capstone`):
 - `strgrep.py REGEX FILE...`: ASCII and UTF-16 string search
 - `nvapi_ids.py FILE`: find embedded NVAPI QueryInterface IDs
 - `dis32.py FILE at|func|callers|xref|floats OFFSET`: x86 disassembly helpers
+- `dis64.py FILE va|xref|dis|back|imm|calls ADDR`: x64 disassembly helpers (RIP-relative xrefs)
+- `thermal_info_probe.py`: dump NVAPI `0x0BC8163D` slot descriptions next to `ThermalGetSensors` readings
 - `pinread.py [--watch] [--raw]`: the original standalone Python reader
 - `asus_regs.py [REG LEN]... [--watch]`: dump ASUS chip registers with signed/BE interpretations
 - `thermal_probe.py [--watch out.csv secs]`: list NVAPI/NVML temperature sensors, optionally log them

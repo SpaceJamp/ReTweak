@@ -11,7 +11,8 @@ namespace ReTweak.Core;
 /// </summary>
 public sealed class GpuMonitor : IDisposable
 {
-    private sealed record Device(GpuInfo Info, nint Nvml, uint FanCount, AsusPowerDetector? Detector, NvidiaThermal? Thermal);
+    private sealed record Device(GpuInfo Info, nint Nvml, uint FanCount, AsusPowerDetector? Detector, NvidiaThermal? Thermal,
+                                 NvidiaHotspot? Hotspot, HotspotAvailability HotspotState, string HotspotNote);
 
     private readonly List<Device> _devices = [];
     private bool _disposed;
@@ -61,17 +62,43 @@ public sealed class GpuMonitor : IDisposable
             // Only probe the I2C bus on ASUS boards: address 0x56 means nothing on other vendors' cards.
             AsusPowerDetector? detector = null;
             NvidiaThermal? thermal = null;
+            NvidiaHotspot? hotspot = null;
+            string hotspotNote = "Not reported by this card";
+            var hotspotState = HotspotAvailability.NotApplicable;
             if (nvapi is not null && nvapiByBus.TryGetValue(pci.Bus, out var nvHandle))
             {
                 if (info.IsAsus) detector = AsusPowerDetector.TryCreate(nvapi, nvHandle);
                 uint? nvmlCore = Nvml.DeviceGetTemperature(handle, 0, out uint c) == Nvml.Success ? c : null;
                 if (Nvml.DeviceGetArchitecture(handle, out uint arch) == Nvml.Success)
+                {
                     thermal = NvidiaThermal.TryCreate(nvapi, nvHandle, arch, nvmlCore);
+                    // RTX 50 dropped the hotspot from the driver APIs; read the GPU register through PawnIO instead.
+                    if (arch == Nvml.ArchBlackwell)
+                    {
+                        hotspot = NvidiaHotspot.TryCreate(pci.Bus, pci.Device, PciFunction(pci), out hotspotState, out string why);
+                        hotspotNote = hotspot is null ? $"Unavailable: {why}" : "from GPU register via PawnIO";
+                    }
+                }
             }
 
-            _devices.Add(new Device(info, handle, fans, detector, thermal));
+            _devices.Add(new Device(info, handle, fans, detector, thermal, hotspot, hotspotState, hotspotNote));
         }
     }
+
+    /// <summary>"0000:01:00.0" -> 0. NVML's PCI struct has no separate function field.</summary>
+    private static unsafe uint PciFunction(Nvml.PciInfo pci)
+    {
+        var id = System.Text.Encoding.ASCII.GetString(new ReadOnlySpan<byte>(pci.BusId, 32)).TrimEnd('\0');
+        int dot = id.LastIndexOf('.');
+        return dot >= 0 && uint.TryParse(id.AsSpan(dot + 1), System.Globalization.NumberStyles.HexNumber, null, out uint f) ? f : 0;
+    }
+
+    public bool HasHotspot(int gpuIndex) => _devices[gpuIndex].Hotspot is not null;
+
+    public HotspotAvailability HotspotState(int gpuIndex) => _devices[gpuIndex].HotspotState;
+
+    /// <summary>Where the hotspot comes from, or why there isn't one (shown under the value).</summary>
+    public string HotspotNote(int gpuIndex) => _devices[gpuIndex].HotspotNote;
 
     public bool HasConnectorSensor(int gpuIndex) => _devices[gpuIndex].Detector is not null;
 
@@ -130,7 +157,8 @@ public sealed class GpuMonitor : IDisposable
             corePrecise,
             memTemp,
             board,
-            memSource);
+            memSource,
+            d.Hotspot?.Read());
     }
 
     public int FanCount(int gpuIndex) => (int)_devices[gpuIndex].FanCount;
@@ -172,6 +200,7 @@ public sealed class GpuMonitor : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+        foreach (var d in _devices) d.Hotspot?.Dispose();
         Nvml.Shutdown();
     }
 }
