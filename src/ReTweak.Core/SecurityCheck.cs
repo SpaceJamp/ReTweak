@@ -31,6 +31,9 @@ public static partial class SecurityCheck
         ("RTCore64", "RTCore64 (MSI Afterburner / RivaTuner): versions before 4.6.3 let any program read and write kernel memory"),
         ("AsIO2", "AsIO2 (ASUS utilities): older versions exposed raw hardware access to any program"),
         ("AsIO3", "AsIO3 (ASUS utilities): older versions exposed raw hardware access to any program"),
+        // The services' real names (Armoury Crate installs AsIO3.sys as "Asusgio3"); the file names above never matched.
+        ("Asusgio2", "AsIO2 (ASUS utilities, e.g. Armoury Crate): older versions exposed raw hardware access to any program"),
+        ("Asusgio3", "AsIO3 (ASUS utilities, e.g. Armoury Crate): older versions exposed raw hardware access to any program"),
         ("IOMap", "IOMap (ASUS GPU Tweak): older versions exposed raw hardware access to any program"),
     ];
 

@@ -254,10 +254,11 @@ public sealed partial class MainViewModel : Observable, IDisposable
     private void ApplyPowerLimit(int percent)
     {
         if (percent == (_powerLimitApplied ?? 100) || !Elevation.IsAdmin || _monitor.PowerLimits(_gpu) is null) return;
-        string? error = _monitor.SetPowerLimitPercent(_gpu, percent);
+        string? error = _monitor.SetPowerLimitPercent(_gpu, percent, out double watts);
         if (error is null) _powerLimitApplied = percent;
+        // watts is what the driver got: a % outside its range is clamped (50 % became 250 W, 62.5 %, on an RTX 5080).
         Diag.Write(error is null ? DiagLevel.Info : DiagLevel.Warn, DiagCategory.Settings,
-                   error is null ? "power limit set" : "power limit not set", new { percent, error });
+                   error is null ? "power limit set" : "power limit not set", new { percent, watts = Math.Round(watts), error });
     }
 
     /// <summary>Applies settings live: thresholds from the next frame, logging on/off, toasts.</summary>
@@ -360,12 +361,9 @@ public sealed partial class MainViewModel : Observable, IDisposable
         if (_fan is null) return;
         FanStatus st;
         var fg = _fan.Options.UseForegroundApp ? ReTweak.Core.Interop.Foreground.Read() : ReTweak.Core.Interop.ForegroundApp.None;
-        var activity = new ActivitySample(s.GpuUtilization, s.MemoryUtilization, s.DecoderUtilization, s.EncoderUtilization,
-                                          s.LoadFraction, fg.Fullscreen, fg.ProcessName);
         try
         {
-            st = _fan.Tick(new FanTemps(s.CoreTempC, s.HotspotC, s.MemoryTempC, s.HotspotMaxC, s.LoadFraction,
-                                        s.MemoryChipMaxC, s.VrmMaxC, activity));
+            st = _fan.Tick(FanTemps.From(s, fg));
         }
         catch (Exception ex)
         {

@@ -406,7 +406,8 @@ internal static class SettingsDialog
                 CriticalDieSpreadC = dieCrit.Value,
             };
             problem ??= AppSettings.Validate(alerts);
-            if (powerLimit.Value is < 50 or > 150) problem ??= "Power limit must be 50-150 % (the driver's own range applies on top).";
+            if (!(powerLimit.Value >= AppSettings.PowerLimitMinPercent && powerLimit.Value <= AppSettings.PowerLimitMaxPercent))
+                problem ??= $"Power limit must be {AppSettings.PowerLimitMinPercent}-{AppSettings.PowerLimitMaxPercent} % (the driver's own range applies on top).";
 
             var fanBoxes = curveTemps.Concat(curvePcts).Concat(new[]
             {

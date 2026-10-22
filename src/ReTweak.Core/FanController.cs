@@ -43,6 +43,12 @@ public readonly record struct FanTemps(double? CoreC, double? HotspotC = null, d
 {
     /// <summary>The hotspot to make safety decisions on: the peak when known, else the average.</summary>
     public double? HotspotPeakC => HotspotMaxC ?? HotspotC;
+
+    /// <summary>Everything fan control reads from one snapshot (the app and the CLI both use this).</summary>
+    public static FanTemps From(GpuSnapshot s, Interop.ForegroundApp fg) =>
+        new(s.CoreTempC, s.HotspotC, s.MemoryTempC, s.HotspotMaxC, s.LoadFraction, s.MemoryChipMaxC, s.VrmMaxC,
+            new ActivitySample(s.GpuUtilization, s.MemoryUtilization, s.DecoderUtilization, s.EncoderUtilization,
+                               s.LoadFraction, fg.Fullscreen, fg.ProcessName));
 }
 
 public sealed record FanOptions
@@ -80,7 +86,8 @@ public sealed record FanOptions
     public bool AutoAssist { get; init; } = true;
     public double AssistHotspotC { get; init; } = 95;
     public double AssistMemoryC { get; init; } = 94;
-    public double AssistGapC { get; init; } = 25;
+    // 30, not 25: a healthy RTX 5080 reached a 25.9 °C gap for a second at 300+ W (logs, 2026-10-21).
+    public double AssistGapC { get; init; } = 30;
     public double AssistReleaseMarginC { get; init; } = 5;
     public double AssistHoldSeconds { get; init; } = 30;
     /// <summary>Added to the driver's speed when the safety net steps in.</summary>
