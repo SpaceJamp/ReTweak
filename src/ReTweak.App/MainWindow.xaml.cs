@@ -305,7 +305,7 @@ public sealed partial class MainWindow : Window
             Canvas.SetLeft(zone, left);
             Canvas.SetTop(zone, top);
             canvas.Children.Add(zone);
-            var t = new TextBlock { Text = "0 RPM", FontSize = 11, Foreground = label };
+            var t = new TextBlock { Text = "0 RPM", FontSize = 12, Foreground = label };
             Canvas.SetLeft(t, left + 4);
             Canvas.SetTop(t, bottom - 18); // bottom corner: the mode description sits in the top-left
             canvas.Children.Add(t);
@@ -344,7 +344,7 @@ public sealed partial class MainWindow : Window
                        $"Auto holds the {(o.SmartInput == SmartInput.Average ? "core/hotspot average" : "hotspot")} at {target:F0} °C ({priority})" +
                        (o.CeilingC > 0 ? $" and keeps the hotspot under {o.CeilingC:F0} °C (red line)." : ".") +
                        " Every sensor votes; the one closest to its limit sets the speed.",
-                FontSize = 11, Foreground = label, TextWrapping = TextWrapping.Wrap, Width = Math.Max(0, X(target) - left - 12),
+                FontSize = 12, Foreground = label, TextWrapping = TextWrapping.Wrap, Width = Math.Max(0, X(target) - left - 12),
             };
             Canvas.SetLeft(t, left + 4);
             Canvas.SetTop(t, top + 2);
@@ -368,7 +368,7 @@ public sealed partial class MainWindow : Window
                 Text = o.AutoAssist
                     ? $"Driver's curve. Safety net steps in at hotspot {o.AssistHotspotC:F0} °C, memory {o.AssistMemoryC:F0} °C, or hotspot {o.AssistGapC:F0} °C above core."
                     : "Driver's curve. ReTweak doesn't touch the fans.",
-                FontSize = 11, Foreground = label, TextWrapping = TextWrapping.Wrap, Width = Math.Max(0, w - 8),
+                FontSize = 12, Foreground = label, TextWrapping = TextWrapping.Wrap, Width = Math.Max(0, w - 8),
             };
             Canvas.SetLeft(t, left + 4);
             Canvas.SetTop(t, top + 2);
