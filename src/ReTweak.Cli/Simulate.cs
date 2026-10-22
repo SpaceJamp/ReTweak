@@ -602,7 +602,8 @@ static class Simulate
     private static PlantRun RunPlant(FanOptions o, Func<int, double> watts, int seconds, double startC = 50, int driverSpeed = 30,
                                      bool hasHotspot = true, bool refuse = false, Func<int, ActivitySample>? activity = null,
                                      Func<int, double, int, double?>? memoryChips = null, double cooling = 1,
-                                     IReadOnlyList<double>? airflow = null, double peakSpread = 1)
+                                     IReadOnlyList<double>? airflow = null, double peakSpread = 1,
+                                     double spreadPerWatt = 0)
     {
         const double ambient = 30, heatCapacity = 150, powerLimit = 400;
         var fake = new FakeFans { DriverSpeed = driverSpeed, Refuse = refuse ? "needs administrator rights" : null };
@@ -617,7 +618,9 @@ static class Simulate
             int fan = fake.Speed ?? driverSpeed;
             double conductance = 2 + 10 * cooling * fan / 100.0; // W per °C above ambient
             hot += (w - conductance * (hot - ambient)) / heatCapacity;
-            double noisy = hot + (rng.NextDouble() - 0.5) * 3;
+            // spreadPerWatt: the hotspot sits above the die by an amount that follows power at once (an RTX 5080
+            // measured ~25 °C at 320 W), so a load dip drops the reading within a second, unlike the slow die.
+            double noisy = hot + spreadPerWatt * w + (rng.NextDouble() - 0.5) * 3;
             fake.Now += TimeSpan.FromSeconds(1);
             double peak = noisy + rng.NextDouble() * peakSpread; // the 1 s peak runs above the average by 0..spread °C
             run.Statuses.Add(fc.Tick(new FanTemps(hot - 7, hasHotspot ? noisy : null, null, hasHotspot ? peak : null, w / powerLimit,
@@ -648,6 +651,10 @@ static class Simulate
         model.Load([.. Enumerable.Repeat(double.NaN, AirflowModel.Buckets)]);
         Check("A damaged airflow.json (NaN) loads as zeros", model.Corrections.All(c => c == 0) && double.IsFinite(model.Estimate(0.5)),
               $"estimate at 50% power {model.Estimate(0.5):F1}%");
+        var learnedMid = new AirflowModel();
+        learnedMid.Learn(0.8, 15); // only gaming power learned
+        Check("The airflow estimate never falls as load rises", learnedMid.Estimate(1.1) >= learnedMid.Estimate(0.8),
+              $"{learnedMid.Estimate(0.8):F1}% at 80% power, {learnedMid.Estimate(1.1):F1}% at 110%");
 
         // One failed write (a driver reset) used to stop fan control for the rest of the session.
         var flaky = new FakeFans { Refuse = "GPU is lost" };
@@ -840,6 +847,45 @@ static class Simulate
         Check($"Auto while gaming holds the Gaming target ({gTarget:F0} °C)", gamingErr <= 2.5 && gaming.Statuses[^1].Activity == ActivityKind.Gaming,
               $"within {gamingErr:F1} °C of {gTarget:F0}; {gaming.Statuses[^1].Text}");
 
+        // A game at ~320 W with short dips to ~210 W (menus, lighter scenes), as in a real log where Auto then
+        // swung the fans 100% → 52% → 100%. The hotspot follows the power at once (die spread), so each dip reads
+        // as "well below target". The fans should ride through dips shorter than the hold.
+        var dipping = auto with { Activities = new Dictionary<ActivityKind, ActivityProfile>(FanOptions.DefaultActivities)
+            { [ActivityKind.Gaming] = new(72, SmartPriority.Balanced, 5) } }; // reachable, so the fans work mid-range
+        double DipWatts(int t) => t >= 200 && t % 40 is >= 30 and < 36 ? 210 : 320;
+        var dips = RunPlant(dipping, DipWatts, 600, startC: 45, activity: Game, spreadPerWatt: 0.075, cooling: 1.6);
+        var steadyPart = dips.FanPercent.Skip(240).ToList();
+        int dipLow = steadyPart.Min(), dipHigh = steadyPart.Max();
+        Check("Auto in a game with short load dips keeps the fans steady (no 100 → 50 % swings)", dipHigh - dipLow <= 22,
+              $"fans {dipLow}-{dipHigh}% after warm-up, {SpeedChanges(steadyPart)} changes in {steadyPart.Count} s");
+        var dipsAvg = RunPlant(dipping with { SmartInput = SmartInput.Average, Activities = new Dictionary<ActivityKind, ActivityProfile>(FanOptions.DefaultActivities)
+            { [ActivityKind.Gaming] = new(57, SmartPriority.Balanced, 5) } }, DipWatts, 600, startC: 45, activity: Game, spreadPerWatt: 0.075, cooling: 1.6);
+        var avgPart = dipsAvg.FanPercent.Skip(240).ToList();
+        Check("...and the same holding the average of core, hotspot and memory", avgPart.Max() - avgPart.Min() <= 22 && SpeedChanges(avgPart) <= SpeedChanges(steadyPart),
+              $"fans {avgPart.Min()}-{avgPart.Max()}%, {SpeedChanges(avgPart)} changes (hotspot: {SpeedChanges(steadyPart)})");
+
+        // Holding the average, a cool memory can't hide a hot hotspot: the ceiling still watches the hotspot itself.
+        var hidden = new FakeFans();
+        using (var fc = hidden.Make(auto with { SmartInput = SmartInput.Average, AdaptToActivity = false, SmartTargetHotspotC = 64 }, range: (30, 100)))
+        {
+            FanStatus st = default!;
+            for (int t = 0; t < 15; t++) { hidden.Now += TimeSpan.FromSeconds(1); st = fc.Tick(new FanTemps(60, 82, 40, 83, 0.8)); }
+            Check("Averaging: a hotspot over the ceiling still drives the fans (average 60.7 °C, under target)",
+                  hidden.Speed == 100 && st.Steering == "hotspot ceiling", $"{hidden.Speed}%, steering {st.Steering}: {st.Text}");
+        }
+        // The deep kind from the same log: a 5 s loading screen at ~50 W in the middle of a ~310 W game.
+        double SceneWatts(int t) => t >= 200 && t % 60 is >= 50 and < 55 ? 50 : 310;
+        var scenes = RunPlant(dipping, SceneWatts, 600, startC: 45, activity: Game, spreadPerWatt: 0.075, cooling: 1.6);
+        int worstDip = Enumerable.Range(240, 340).Where(t => t % 60 == 49).Max(t => scenes.FanPercent[t] - scenes.FanPercent.Skip(t).Take(12).Min());
+        Check("...and a 5 s loading screen (50 W) barely moves them", worstDip <= 10, $"largest drop during a loading screen: {worstDip}%");
+
+        var quit = RunPlant(dipping, t => t < 300 ? 320 : 40, 420, startC: 45, activity: t => t < 300 ? Game(t) : S(3, 0.1),
+                            spreadPerWatt: 0.075, cooling: 1.6);
+        int fanAtQuit = quit.FanPercent[299];
+        int slowedAt = Enumerable.Range(300, 120).FirstOrDefault(t => quit.FanPercent[t] < fanAtQuit - 5, -1);
+        Check("...but still slows down soon after the game ends", slowedAt is > 300 and <= 330,
+              $"fans {fanAtQuit}% at the end of the game, slowing from {slowedAt - 300} s after, {quit.FanPercent[^1]}% at 2 min");
+
         var render = RunPlant(auto, _ => 320, 500, activity: _ => S(97, 0.95, app: "blender"));
         double renderErr = render.HotspotC.Skip(350).Max(h => Math.Abs(h - cTarget));
         Check($"Auto during a render holds the Compute target ({cTarget:F0} °C)", renderErr <= 2.5 && render.Statuses[^1].Activity == ActivityKind.Compute,
@@ -880,7 +926,8 @@ static class Simulate
         Func<int, double> ramp = t => t < 300 ? 220 : Math.Min(340, 220 + (t - 300) * 30);
         var lead = RunPlant(auto, ramp, 420, startC: gTarget, activity: Game);
         var noLead = RunPlant(auto with { Activities = new Dictionary<ActivityKind, ActivityProfile>(FanOptions.DefaultActivities)
-                               { [ActivityKind.Gaming] = new(gTarget, SmartPriority.Tight, 0) } }, ramp, 420, startC: gTarget, activity: Game);
+                               { [ActivityKind.Gaming] = FanOptions.DefaultActivities[ActivityKind.Gaming] with { LeadSeconds = 0 } } },
+                           ramp, 420, startC: gTarget, activity: Game); // same tuning, only the look-ahead off
         Check("Auto: 5 s look-ahead on a rising load moves the fans earlier (peak no worse)",
               lead.FanPercent[305] > noLead.FanPercent[305] && lead.HotspotC.Skip(300).Max() <= noLead.HotspotC.Skip(300).Max() + 0.1,
               $"fans 5 s into the ramp: {lead.FanPercent[305]}% vs {noLead.FanPercent[305]}% without look-ahead; " +

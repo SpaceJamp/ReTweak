@@ -268,7 +268,9 @@ public sealed partial class MainWindow : Window
         }
         // Axis titles.
         var axisSource = o.Mode switch { FanMode.Driver => FanSource.Core, FanMode.Smart => FanSource.Hotspot, _ => o.Source };
-        var xTitle = Label($"{FanOptions.SourceName(axisSource) switch { "core" => "GPU core", "hottest" => "Hottest sensor", var n => char.ToUpper(n[0]) + n[1..] }} temperature (°C)", 12);
+        string axisName = o.Mode == FanMode.Smart && o.SmartInput == SmartInput.Average ? "Average (core, hotspot, memory)"
+            : FanOptions.SourceName(axisSource) switch { "core" => "GPU core", "hottest" => "Hottest sensor", var n => char.ToUpper(n[0]) + n[1..] };
+        var xTitle = Label($"{axisName} temperature (°C)", 12);
         xTitle.Foreground = axis;
         xTitle.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
         Canvas.SetLeft(xTitle, left + (w - xTitle.DesiredSize.Width) / 2);
