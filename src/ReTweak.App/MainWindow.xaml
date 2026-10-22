@@ -187,7 +187,7 @@
                                     Visibility="{x:Bind ViewModel.FanNeedsAdmin, Mode=OneWay}"
                                     Style="{StaticResource AccentButtonStyle}" />
                             <StackPanel Orientation="Horizontal" Spacing="6">
-                                <TextBlock Text="Presets" VerticalAlignment="Center" Style="{StaticResource CaptionTextBlockStyle}"
+                                <TextBlock Text="Curve presets" VerticalAlignment="Center" Style="{StaticResource CaptionTextBlockStyle}"
                                            Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                                 <Button Content="Quiet" Tag="Quiet" Click="FanPreset_Click" Padding="10,3" />
                                 <Button Content="Balanced" Tag="Balanced" Click="FanPreset_Click" Padding="10,3" />
@@ -197,7 +197,7 @@
                                        Style="{StaticResource CaptionTextBlockStyle}" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
                             <TextBlock Style="{StaticResource CaptionTextBlockStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                        TextWrapping="Wrap" MaxWidth="320"
-                                       Text="In Curve mode, drag the points on the chart. More options (input, ramping, 0 RPM, failsafes, the Auto safety net) are in Settings." />
+                                       Text="{x:Bind ViewModel.FanHelp, Mode=OneWay}" />
                         </StackPanel>
 
                         <StackPanel Grid.Column="1" Spacing="6">
