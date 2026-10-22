@@ -340,9 +340,9 @@ public sealed partial class MainWindow : Window
             });
             var t = new TextBlock
             {
-                Text = (activity == ActivityKind.Unknown ? $"Auto holds the hotspot at {target:F0} °C ({priority})"
-                                                         : $"{activity}: Auto holds the hotspot at {target:F0} °C ({priority})") +
-                       (o.CeilingC > 0 ? $" and keeps it under {o.CeilingC:F0} °C (red line)." : ".") +
+                Text = (activity == ActivityKind.Unknown ? "" : $"{activity}: ") +
+                       $"Auto holds the {(o.SmartInput == SmartInput.Average ? "core/hotspot average" : "hotspot")} at {target:F0} °C ({priority})" +
+                       (o.CeilingC > 0 ? $" and keeps the hotspot under {o.CeilingC:F0} °C (red line)." : ".") +
                        " Every sensor votes; the one closest to its limit sets the speed.",
                 FontSize = 11, Foreground = label, TextWrapping = TextWrapping.Wrap, Width = Math.Max(0, X(target) - left - 12),
             };

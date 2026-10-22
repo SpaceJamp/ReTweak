@@ -228,7 +228,7 @@ public sealed partial class MainViewModel : Observable, IDisposable
         {
             _fan = new FanController(monitor, _gpu);
             _fan.Airflow.Load(AirflowStore.Load(GpuName)); // what Auto learned about this card last time
-            FanSpeedRange = $"Driver allows {_fan.Range.Min}-{_fan.Range.Max} %";
+            FanSpeedRange = $" · driver allows {_fan.Range.Min}-{_fan.Range.Max} %";
             // A manual speed would outlive ReTweak, so hand the fans back however the process ends.
             AppDomain.CurrentDomain.ProcessExit += (_, _) => _fan.Dispose();
             AppDomain.CurrentDomain.UnhandledException += (_, _) => _fan.Dispose();
@@ -275,9 +275,18 @@ public sealed partial class MainViewModel : Observable, IDisposable
             Set(ref _fanModeIndex, Math.Max(0, Array.IndexOf(FanModeOrder, settings.Fans.Mode)), nameof(FanModeIndex));
             FanChartLabel = settings.Fans.Mode switch
             {
-                FanMode.Smart => "Auto · holds the target · the dot is now",
-                FanMode.Driver => "Driver · the dot is now",
+                FanMode.Smart => "Auto holds the target · the dot is now",
+                FanMode.Driver => "The card's own curve · the dot is now",
+                FanMode.Fixed => "Fixed speed · the dot is now",
                 _ => "Fan curve · the dot is now",
+            };
+            // One hint per mode, pointing at what that mode actually has.
+            FanHelp = settings.Fans.Mode switch
+            {
+                FanMode.Smart => "Targets per activity, the ceiling and 0 RPM are in Settings.",
+                FanMode.Driver => "The safety net's thresholds are in Settings.",
+                FanMode.Fixed => "Set the speed in Settings.",
+                _ => "Drag the points on the chart. Input, ramping, 0 RPM and failsafes are in Settings.",
             };
         }
         if (_sampler is null) return;
@@ -377,7 +386,8 @@ public sealed partial class MainViewModel : Observable, IDisposable
         if (s.VrmMaxC is not null) inputs.Add("VRMs");
         inputs.Add("load, power, video engines");
         if (_fan.Options.UseForegroundApp) inputs.Add("foreground app");
-        FanInputs = (s.HotspotC is not null ? "Auto sees (PawnIO): " : "Auto sees (install PawnIO for more): ") + string.Join(", ", inputs);
+        FanInputs = _fan.Options.Mode != FanMode.Smart ? "" // only Auto uses them
+            : (s.HotspotC is not null ? "Auto sees (PawnIO): " : "Auto sees (install PawnIO for more): ") + string.Join(", ", inputs);
         FanNeedsAdmin = st.NeedsAdmin && !autoUnelevated && !Elevation.IsAdmin;
         FanStatusBrush = st.Severity > AlertSeverity.None ? Theme.For(st.Severity) : st.Mode == FanMode.Driver ? Theme.Muted : Theme.Ok;
         FanChanged?.Invoke();
@@ -391,6 +401,8 @@ public sealed partial class MainViewModel : Observable, IDisposable
     /// <summary>Which sensors Auto can use: more with PawnIO (hotspot, its sensors, memory chips).</summary>
     private string _fanInputs = "";
     public string FanInputs { get => _fanInputs; private set => Set(ref _fanInputs, value); }
+    private string _fanHelp = "";
+    public string FanHelp { get => _fanHelp; private set => Set(ref _fanHelp, value); }
     public int? FanAppliedPercent => _fan?.Status.Percent;
     /// <summary>Average reported fan speed (%), for the chart while the driver is in charge.</summary>
     public double? CurrentFanPercent { get; private set; }
