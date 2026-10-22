@@ -31,6 +31,9 @@ public sealed record ConnectorReading(IReadOnlyList<PinReading> Pins)
 /// <summary>One ASUS board temperature sensor; <see cref="Celsius"/> is null when absent or implausible.</summary>
 public readonly record struct BoardTemp(string Name, double? Celsius);
 
+/// <summary>Power limits the driver allows for a card, in watts.</summary>
+public sealed record PowerLimits(double MinW, double MaxW, double DefaultW);
+
 public sealed record GpuInfo(int Index, string Name, uint PciBus, ushort DeviceId, ushort SubVendorId, ushort SubDeviceId)
 {
     public bool IsAsus => SubVendorId == 0x1043;
@@ -60,8 +63,15 @@ public sealed record GpuSnapshot(
     uint? DecoderUtilization = null,              // video decode engine load (%)
     uint? EncoderUtilization = null,              // video encode engine load (%)
     IReadOnlyList<int>? MemoryChipsC = null,       // each memory chip's temperature (PawnIO), when available
-    double? HotspotSpreadC = null)                // hotspot minus the coolest die sensor, averaged over the last second
+    double? HotspotSpreadC = null,                // hotspot minus the coolest die sensor, averaged over the last second
+    double? PowerDefaultLimitWatts = null)        // the card's default power limit, whatever limit is set now
 {
+    /// <summary>
+    /// Power as a fraction of the card's default limit. Not of the current limit: Auto's learned airflow is per
+    /// load, and a lowered power limit must not make the same watts look like more load.
+    /// </summary>
+    public double? LoadFraction => PowerWatts / (PowerDefaultLimitWatts ?? PowerLimitWatts);
+
     /// <summary>NVIDIA's die average (thermal channel #6), or null.</summary>
     public double? DieAverageC => ThermalChannels is { } c && c.Count > NvidiaHotspot.AverageChannel ? c[NvidiaHotspot.AverageChannel] : null;
 

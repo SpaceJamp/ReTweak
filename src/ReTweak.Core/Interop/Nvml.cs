@@ -5,7 +5,7 @@ namespace ReTweak.Core.Interop;
 
 /// <summary>
 /// Minimal NVML bindings. nvml.dll ships with every NVIDIA driver (System32).
-/// Only documented calls are used here; all are read-only except the fan-control setters.
+/// Only documented calls are used here; all are read-only except the fan and power-limit setters.
 /// </summary>
 internal static partial class Nvml
 {
@@ -86,6 +86,16 @@ internal static partial class Nvml
 
     [LibraryImport(Lib, EntryPoint = "nvmlDeviceGetEnforcedPowerLimit")]
     public static partial int DeviceGetEnforcedPowerLimit(nint device, out uint milliwatts);
+
+    [LibraryImport(Lib, EntryPoint = "nvmlDeviceGetPowerManagementLimitConstraints")]
+    public static partial int DeviceGetPowerManagementLimitConstraints(nint device, out uint minMilliwatts, out uint maxMilliwatts);
+
+    [LibraryImport(Lib, EntryPoint = "nvmlDeviceGetPowerManagementDefaultLimit")]
+    public static partial int DeviceGetPowerManagementDefaultLimit(nint device, out uint milliwatts);
+
+    /// <summary>Needs administrator rights. Lasts until the driver reloads (a reboot).</summary>
+    [LibraryImport(Lib, EntryPoint = "nvmlDeviceSetPowerManagementLimit")]
+    public static partial int DeviceSetPowerManagementLimit(nint device, uint milliwatts);
 
     [LibraryImport(Lib, EntryPoint = "nvmlDeviceGetNumFans")]
     public static partial int DeviceGetNumFans(nint device, out uint count);

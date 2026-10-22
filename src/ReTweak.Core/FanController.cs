@@ -17,8 +17,9 @@ public enum SmartInput
     /// <summary>The hotspot (the core without PawnIO): the hottest point, and the fastest to react.</summary>
     Hotspot,
     /// <summary>
-    /// The average of core, hotspot and memory: steadier, because the hotspot jumps with every load change
-    /// while memory moves slowly. Failsafes, the ceiling and the other limits still watch each sensor alone.
+    /// The average of core and hotspot: steadier, because the hotspot jumps with every load change while the core
+    /// moves less. Memory isn't in it (it lags minutes behind); its own limit still votes, as do the failsafes and
+    /// the ceiling, each on its own sensor.
     /// </summary>
     Average,
 }
@@ -105,7 +106,7 @@ public sealed record FanOptions
     /// <see cref="SmartIdleStopBelowC"/>, hand the fans to the driver so they can stop.
     /// </summary>
     public bool SmartIdleStop { get; init; }
-    /// <summary>What Auto holds at the activity targets: the hotspot, or the average of core, hotspot and memory.</summary>
+    /// <summary>What Auto holds at the activity targets: the hotspot, or the average of core and hotspot.</summary>
     public SmartInput SmartInput { get; init; } = SmartInput.Hotspot;
     /// <summary>Auto's 0 RPM threshold on the hotspot (8 °C lower on the core without one). Fans return 5 °C above it.</summary>
     public double SmartIdleStopBelowC { get; init; } = 50;
@@ -156,8 +157,10 @@ public sealed record FanOptions
             var p = Curve[i];
             if (p.TempC is < 20 or > 110) return $"Curve point {i + 1}: temperature must be 20-110 °C.";
             if (p.Percent is < 0 or > 100) return $"Curve point {i + 1}: fan speed must be 0-100 %.";
-            if (i > 0 && p.TempC <= Curve[i - 1].TempC) return $"Curve point {i + 1}: temperatures must increase from point to point.";
-            if (i > 0 && p.Percent < Curve[i - 1].Percent) return $"Curve point {i + 1}: fan speed can't drop as temperature rises.";
+            if (i > 0 && p.TempC <= Curve[i - 1].TempC)
+                return $"Curve point {i + 1} is {p.TempC:0} °C; it must be above point {i} ({Curve[i - 1].TempC:0} °C).";
+            if (i > 0 && p.Percent < Curve[i - 1].Percent)
+                return $"Curve point {i + 1} is {p.Percent} %; it can't be below point {i} ({Curve[i - 1].Percent} %): fan speed can't drop as temperature rises.";
         }
         if (HysteresisC is < 0 or > 10) return "Hysteresis must be 0-10 °C.";
         if (FailsafeTempC is < 40 or > 110) return "Core failsafe must be 40-110 °C.";
@@ -181,7 +184,7 @@ public sealed record FanOptions
         if (AssistReleaseMarginC is < 1 or > 20) return "Safety-net release margin must be 1-20 °C.";
         if (AssistHoldSeconds is < 0 or > 600) return "Safety-net hold time must be 0-600 s.";
         if (AssistBoostPercent is < 0 or > 100) return "Safety-net boost must be 0-100 %.";
-        // From 30: held on the average (core, hotspot, memory), an idle card sits in the mid 30s.
+        // From 30: held on the average of core and hotspot, an idle card sits in the mid 30s.
         if (SmartTargetHotspotC is < 30 or > 105) return "Auto hotspot target must be 30-105 °C.";
         if (CeilingC != 0 && CeilingC is < 45 or > 110) return "Auto ceiling must be 45-110 °C (0 = off).";
         if (SmartTargetCoreC is < 35 or > 95) return "Auto core target must be 35-95 °C.";
@@ -283,6 +286,9 @@ public sealed class FanController : IDisposable
     private double? _envelope;
     private TimeSpan _envelopeHeldUntil, _powerHeldUntil;
     private bool _loadWasLow;
+    private double? _easedTarget;
+    /// <summary>How long a change of target (another activity, or a new setting) takes to arrive in full.</summary>
+    public const double TargetEaseSeconds = 20;
     /// <summary>
     /// While gaming or rendering, a high is held this long before a drop starts to count, then eases in over
     /// HeavyEaseDownSeconds (see SmartTick). Without the hold, a 5 s loading screen (~50 W) still eased the fans
@@ -355,6 +361,7 @@ public sealed class FanController : IDisposable
         if (value.Source != previous.Source) _smoothed = null; // a different input: don't average across it
         if (value.Mode != FanMode.Driver) { _assisting = false; _coolSince = null; }
         if (value.Mode != FanMode.Smart || value.SmartPriority != previous.SmartPriority) _smartRunning = false;
+        if (value.Mode != previous.Mode) _easedTarget = null; // entering Auto starts from its own target, not an old one
     }
 
     /// <summary>Runs one control step; with diagnostics on, logs the inputs, internals and the decision.</summary>
@@ -436,6 +443,7 @@ public sealed class FanController : IDisposable
             _smartInput = sourceName; // hotspot appeared or vanished: different scale, start over
             _smoothed = null;
             _envelope = null;
+            _easedTarget = null;
             _smartRunning = false;
         }
         if (source is not double raw)
@@ -530,6 +538,11 @@ public sealed class FanController : IDisposable
         bool targetScale = input is "hotspot" or "average"; // the activity targets are on the hotspot's scale
         double primaryTarget = targetScale ? profile.TargetHotspotC
                              : activity == ActivityKind.Unknown ? o.SmartTargetCoreC : profile.TargetHotspotC - 8;
+        // A new activity's target arrives over ~TargetEaseSeconds instead of at once: a jump from Desktop 43 °C to
+        // Gaming 57 °C dipped the fans 97% -> 80% as a game started, and Gaming -> Idle spiked them 42% -> 87%
+        // after quitting (logs, 2026-10-21).
+        _easedTarget = _easedTarget is double et ? et + (primaryTarget - et) * dt / (TargetEaseSeconds + dt) : primaryTarget;
+        primaryTarget = _easedTarget.Value;
         double primaryLimit = targetScale ? o.FailsafeHotspotC : o.FailsafeTempC;
         double span = primaryLimit - primaryTarget;
 
@@ -763,11 +776,11 @@ public sealed class FanController : IDisposable
         return null;
     }
 
-    /// <summary>Auto's input: the hotspot (core without one), or the average of core, hotspot and memory.</summary>
+    /// <summary>Auto's input: the hotspot (core without one), or the average of core and hotspot.</summary>
     private static (double? Temp, string Name) SmartSource(FanOptions o, FanTemps t)
     {
-        if (o.SmartInput == SmartInput.Average && new[] { t.CoreC, t.HotspotC, t.MemoryC }.OfType<double>().ToList() is { Count: >= 2 } v)
-            return (v.Average(), "average");
+        if (o.SmartInput == SmartInput.Average && t.CoreC is double core && t.HotspotC is double hot)
+            return ((core + hot) / 2, "average");
         return (t.HotspotC ?? t.CoreC, t.HotspotC is null ? "core" : "hotspot");
     }
 

@@ -12,7 +12,8 @@ namespace ReTweak.Core;
 public sealed class GpuMonitor : IDisposable
 {
     private sealed record Device(GpuInfo Info, nint Nvml, uint FanCount, AsusPowerDetector? Detector, NvidiaThermal? Thermal,
-                                 HotspotSampler? Hotspot, HotspotAvailability HotspotState, string HotspotNote);
+                                 HotspotSampler? Hotspot, HotspotAvailability HotspotState, string HotspotNote,
+                                 PowerLimits? Limits);
 
     private readonly List<Device> _devices = [];
     private bool _disposed;
@@ -83,7 +84,10 @@ public sealed class GpuMonitor : IDisposable
                 }
             }
 
-            _devices.Add(new Device(info, handle, fans, detector, thermal, hotspot, hotspotState, hotspotNote));
+            PowerLimits? limits = Nvml.DeviceGetPowerManagementLimitConstraints(handle, out uint minMw, out uint maxMw) == Nvml.Success
+                                  && Nvml.DeviceGetPowerManagementDefaultLimit(handle, out uint defMw) == Nvml.Success && defMw > 0
+                ? new PowerLimits(minMw / 1000.0, maxMw / 1000.0, defMw / 1000.0) : null;
+            _devices.Add(new Device(info, handle, fans, detector, thermal, hotspot, hotspotState, hotspotNote, limits));
         }
     }
 
@@ -206,7 +210,8 @@ public sealed class GpuMonitor : IDisposable
             decoder,
             encoder,
             d.Hotspot?.MemoryChips(),
-            hotspot?.SpreadC);
+            hotspot?.SpreadC,
+            d.Limits?.DefaultW);
         if (Diag.IsOn(DiagLevel.Debug)) LogSnapshot(snapshot, hotspot?.Samples);
         return snapshot;
     }
@@ -240,6 +245,26 @@ public sealed class GpuMonitor : IDisposable
     });
 
     public int FanCount(int gpuIndex) => (int)_devices[gpuIndex].FanCount;
+
+    /// <summary>The power limits the driver allows, or null if the card doesn't report them.</summary>
+    public PowerLimits? PowerLimits(int gpuIndex) => _devices[gpuIndex].Limits;
+
+    /// <summary>
+    /// Sets the power limit to <paramref name="percent"/> of the card's default (clamped to what the driver
+    /// allows); 100 restores the default. Needs administrator rights. Null on success, else why it failed.
+    /// </summary>
+    public string? SetPowerLimitPercent(int gpuIndex, int percent)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        var d = _devices[gpuIndex];
+        if (d.Limits is not { } l) return "this card doesn't report its power limits";
+        double watts = Math.Clamp(l.DefaultW * percent / 100.0, l.MinW, l.MaxW);
+        using var timer = Diag.Time("nvml.set_power_limit");
+        int rc = Nvml.DeviceSetPowerManagementLimit(d.Nvml, (uint)Math.Round(watts * 1000));
+        if (rc == Nvml.Success) return null;
+        timer.Fail(Nvml.ErrorString(rc));
+        return Nvml.ErrorString(rc);
+    }
 
     /// <summary>Lowest and highest manual fan speed the driver accepts (%), or null if unknown.</summary>
     public (int Min, int Max)? FanSpeedRange(int gpuIndex) =>

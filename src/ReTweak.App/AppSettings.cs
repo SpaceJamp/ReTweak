@@ -21,6 +21,12 @@ public sealed record AppSettings
     /// <summary>Diagnostic log level (Off by default); files go to %LocalAppData%\ReTweak\diagnostics.</summary>
     public DiagLevel DiagnosticsLevel { get; init; } = DiagLevel.Off;
     public string LogFolder { get; init; } = Path.Combine(Folder, "logs");
+    /// <summary>
+    /// Power limit in % of the card's default (100 = leave it at the default). Less power means less heat for the
+    /// fans to move, for a few % of performance. Applied when ReTweak runs as administrator; clamped to what the
+    /// driver allows. The driver resets it at reboot and ReTweak applies it again when it starts.
+    /// </summary>
+    public int PowerLimitPercent { get; init; } = 100;
 
     /// <summary>What <see cref="Load"/> had to replace with defaults, for the diagnostic log (it runs before logging starts).</summary>
     public static IReadOnlyList<string> LoadProblems { get; private set; } = [];
@@ -61,8 +67,14 @@ public sealed record AppSettings
             alerts = new AlertOptions();
         }
         string logFolder = string.IsNullOrWhiteSpace(s.LogFolder) ? new AppSettings().LogFolder : s.LogFolder;
+        int powerLimit = s.PowerLimitPercent;
+        if (powerLimit is < 50 or > 150)
+        {
+            problems.Add($"power limit {powerLimit}% reset to 100%");
+            powerLimit = 100;
+        }
         LoadProblems = problems;
-        return s with { Fans = fans ?? new(), Alerts = alerts ?? new(), LogFolder = logFolder };
+        return s with { Fans = fans ?? new(), Alerts = alerts ?? new(), LogFolder = logFolder, PowerLimitPercent = powerLimit };
     }
 
     public void Save()

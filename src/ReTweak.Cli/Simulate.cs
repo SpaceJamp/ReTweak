@@ -861,16 +861,16 @@ static class Simulate
         var dipsAvg = RunPlant(dipping with { SmartInput = SmartInput.Average, Activities = new Dictionary<ActivityKind, ActivityProfile>(FanOptions.DefaultActivities)
             { [ActivityKind.Gaming] = new(57, SmartPriority.Balanced, 5) } }, DipWatts, 600, startC: 45, activity: Game, spreadPerWatt: 0.075, cooling: 1.6);
         var avgPart = dipsAvg.FanPercent.Skip(240).ToList();
-        Check("...and the same holding the average of core, hotspot and memory", avgPart.Max() - avgPart.Min() <= 22 && SpeedChanges(avgPart) <= SpeedChanges(steadyPart),
+        Check("...and the same holding the average of core and hotspot", avgPart.Max() - avgPart.Min() <= 22 && SpeedChanges(avgPart) <= SpeedChanges(steadyPart),
               $"fans {avgPart.Min()}-{avgPart.Max()}%, {SpeedChanges(avgPart)} changes (hotspot: {SpeedChanges(steadyPart)})");
 
-        // Holding the average, a cool memory can't hide a hot hotspot: the ceiling still watches the hotspot itself.
+        // Holding the average, a cool core can't hide a hot hotspot: the ceiling still watches the hotspot itself.
         var hidden = new FakeFans();
-        using (var fc = hidden.Make(auto with { SmartInput = SmartInput.Average, AdaptToActivity = false, SmartTargetHotspotC = 64 }, range: (30, 100)))
+        using (var fc = hidden.Make(auto with { SmartInput = SmartInput.Average, AdaptToActivity = false, SmartTargetHotspotC = 70 }, range: (30, 100)))
         {
             FanStatus st = default!;
-            for (int t = 0; t < 15; t++) { hidden.Now += TimeSpan.FromSeconds(1); st = fc.Tick(new FanTemps(60, 82, 40, 83, 0.8)); }
-            Check("Averaging: a hotspot over the ceiling still drives the fans (average 60.7 °C, under target)",
+            for (int t = 0; t < 15; t++) { hidden.Now += TimeSpan.FromSeconds(1); st = fc.Tick(new FanTemps(50, 82, 40, 83, 0.8)); }
+            Check("Averaging: a hotspot over the ceiling still drives the fans (average 66 °C, under target)",
                   hidden.Speed == 100 && st.Steering == "hotspot ceiling", $"{hidden.Speed}%, steering {st.Steering}: {st.Text}");
         }
         // The deep kind from the same log: a 5 s loading screen at ~50 W in the middle of a ~310 W game.
@@ -885,6 +885,24 @@ static class Simulate
         int slowedAt = Enumerable.Range(300, 120).FirstOrDefault(t => quit.FanPercent[t] < fanAtQuit - 5, -1);
         Check("...but still slows down soon after the game ends", slowedAt is > 300 and <= 330,
               $"fans {fanAtQuit}% at the end of the game, slowing from {slowedAt - 300} s after, {quit.FanPercent[^1]}% at 2 min");
+
+        // Activity switches (logs, 2026-10-21): at a game's start the first seconds still used the Desktop target, the
+        // fans jumped, then dipped 97% -> 80% when the higher Gaming target arrived; after quitting, the Idle target
+        // made them spike 42% -> 87% while the card cooled.
+        // The user's own Auto: holding the core/hotspot average, a big jump between Desktop and Gaming targets.
+        var mine = auto with { SmartInput = SmartInput.Average, Activities = new Dictionary<ActivityKind, ActivityProfile>(FanOptions.DefaultActivities)
+        {
+            [ActivityKind.Idle] = new(38, SmartPriority.Tight, 0), [ActivityKind.Desktop] = new(43, SmartPriority.Tight, 3),
+            [ActivityKind.Gaming] = new(57, SmartPriority.Balanced, 5),
+        } };
+        var session = RunPlant(mine, t => t is >= 100 and < 400 ? 320 : 40, 520, startC: 40,
+                               activity: t => t is >= 100 and < 400 ? Game(t) : S(12, 0.1), spreadPerWatt: 0.075, cooling: 1.6);
+        int startPeak = session.FanPercent.Skip(100).Take(15).Max();
+        int startDip = startPeak - session.FanPercent.Skip(100 + session.FanPercent.Skip(100).Take(15).ToList().IndexOf(startPeak)).Take(30).Min();
+        int atQuit = session.FanPercent[405], afterQuitPeak = session.FanPercent.Skip(406).Take(60).Max();
+        Check("Auto: no dip as a game starts, no spike after it ends (activity switches move the target gently)",
+              startDip <= 10 && afterQuitPeak <= atQuit + 5,
+              $"start: peak {startPeak}%, then down {startDip}%; end: {atQuit}% 5 s after, highest {afterQuitPeak}% in the next minute");
 
         var render = RunPlant(auto, _ => 320, 500, activity: _ => S(97, 0.95, app: "blender"));
         double renderErr = render.HotspotC.Skip(350).Max(h => Math.Abs(h - cTarget));
