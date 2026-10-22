@@ -45,7 +45,7 @@
                                 <TextBlock Text="{x:Bind ViewModel.Status, Mode=OneWay}" />
                             </StackPanel>
                         </Border>
-                        <Button Click="Settings_Click" ToolTipService.ToolTip="Settings" Padding="8">
+                        <Button Click="Settings_Click" ToolTipService.ToolTip="Settings" AutomationProperties.Name="Settings" Padding="8">
                             <SymbolIcon Symbol="Setting" />
                         </Button>
                     </StackPanel>
@@ -110,21 +110,24 @@
                             <TextBlock Text="{x:Bind ViewModel.MemoryClock, Mode=OneWay}" Style="{StaticResource TileValue}" />
                         </StackPanel>
                     </Border>
-                    <Border Grid.Row="1" Grid.Column="2" Style="{StaticResource Card}" ToolTipService.ToolTip="{x:Bind ViewModel.HotspotHelp}">
+                    <Border Grid.Row="1" Grid.Column="2" Style="{StaticResource Card}">
+                        <!-- Details live in the tooltip: on the tile they wrapped to five lines and stretched the whole row. -->
+                        <ToolTipService.ToolTip>
+                            <StackPanel Spacing="6" MaxWidth="360">
+                                <TextBlock Text="{x:Bind ViewModel.HotspotChannels, Mode=OneWay}" TextWrapping="Wrap" />
+                                <TextBlock Text="{x:Bind ViewModel.HotspotSpread, Mode=OneWay}" TextWrapping="Wrap" />
+                                <TextBlock Text="The hotspot is the hottest of the GPU's four thermal sensors (register #5), read 10 times a second; the value is the last second's average, failsafes use the peak. Die spread is the hotspot minus the coolest sensor: about 4 °C at idle and 25-32 °C at full load on an RTX 5080, far more points to poor cooler contact."
+                                           TextWrapping="Wrap" />
+                                <TextBlock Text="{x:Bind ViewModel.HotspotHelp}" TextWrapping="Wrap" />
+                            </StackPanel>
+                        </ToolTipService.ToolTip>
                         <StackPanel>
                             <TextBlock Text="GPU hotspot" Style="{StaticResource TileLabel}" />
                             <TextBlock Text="{x:Bind ViewModel.Hotspot, Mode=OneWay}" Style="{StaticResource TileValue}" />
                             <TextBlock Text="{x:Bind ViewModel.HotspotPeak, Mode=OneWay}" TextWrapping="Wrap"
-                                       ToolTipService.ToolTip="Read 10 times a second. The value is the average of the last second; failsafes and the fan safety net use the peak."
                                        Style="{StaticResource CaptionTextBlockStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                             <TextBlock Text="{x:Bind ViewModel.HotspotNote}" TextWrapping="Wrap"
                                        Style="{StaticResource CaptionTextBlockStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                            <TextBlock Text="{x:Bind ViewModel.HotspotChannels, Mode=OneWay}" TextWrapping="Wrap"
-                                       ToolTipService.ToolTip="The GPU's four thermal sensors; the hotspot is the hottest of them (register #5). HWMonitor's Hot Spot is sensor #1 only."
-                                       Style="{StaticResource CaptionTextBlockStyle}" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
-                            <TextBlock Text="{x:Bind ViewModel.HotspotSpread, Mode=OneWay}" TextWrapping="Wrap"
-                                       ToolTipService.ToolTip="Die spread: the hotspot minus the coolest of the four sensors. It grows with power (on an RTX 5080 about 4 °C at idle, 25-32 °C at full load); far more than that points to poor cooler contact. Die average: NVIDIA's own average of the die (register #6)."
-                                       Style="{StaticResource CaptionTextBlockStyle}" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
                             <HyperlinkButton Content="Get PawnIO" Padding="0" Margin="0,2,0,0" Click="GetPawnIo_Click"
                                              Visibility="{x:Bind ViewModel.OfferPawnIo}" />
                         </StackPanel>

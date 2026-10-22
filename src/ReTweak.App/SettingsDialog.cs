@@ -203,7 +203,7 @@ internal static class SettingsDialog
             ItemsSource = new[] { "Quiet (slow, rare changes)", "Balanced", "Tight (holds within ~1 °C)" },
         };
         var smartIdle = new ToggleSwitch { Header = "Auto: 0 RPM at light load (idle, desktop, video)", IsOn = f.SmartIdleStop };
-        var powerLimit = Num($"Power limit (% of the card's default{(powerLimitInfo is null ? "" : $"; {powerLimitInfo}")})", current.PowerLimitPercent);
+        var powerLimit = Num("Power limit (% of the card's default)", current.PowerLimitPercent);
         powerLimit.SmallChange = 5;
         powerLimit.IsEnabled = powerLimitInfo is not null;
         ToolTipService.SetToolTip(powerLimit, "Less power means less heat for the fans to move, for a few % of performance (often less with DLSS). " +
@@ -347,6 +347,18 @@ internal static class SettingsDialog
             Style = (Style)Application.Current.Resources["BodyStrongTextBlockStyle"],
             Margin = new Thickness(0, 8, 0, 0),
         };
+        // Folded unless their mode is in use: settings you don't see were blocking saves you did make (log, 2026-10-21).
+        Expander Fold(string header, bool open, params UIElement[] items)
+        {
+            var body = new StackPanel { Spacing = 8 };
+            foreach (var i in items) body.Children.Add(i);
+            return new Expander { Header = header, IsExpanded = open, Content = body,
+                                  HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Stretch };
+        }
+        var curveFold = Fold("Curve", f.Mode == FanMode.Curve,
+                             presetRow, curveGrid, Pairs((fanHyst, smoothing), (rampUp, rampDown)), zeroRpm, zeroBelow);
+        var assistFold = Fold("Auto safety net (Driver mode)", f.Mode == FanMode.Driver,
+                              assistNote, assist, Pairs((assistHot, assistMem), (assistGap, assistBoost), (assistHold, assistMargin)));
         var panel = new StackPanel { Spacing = 8, MinWidth = 420 };
         foreach (var e in new UIElement[]
         {
@@ -357,14 +369,14 @@ internal static class SettingsDialog
             Section("Security"), Caption("Checks ReTweak's files, autostart, the PawnIO driver, data folders, known UAC-bypass entries, " +
                                          "risky drivers and Windows protections. Read-only."), runSecurity, securityResults,
             Section("Alert thresholds"), grid, reset,
-            Section("Power"), powerLimit,
+            Section("Power"), powerLimit, Caption(powerLimitInfo ?? "This card doesn't report its power limits."),
             Section("Fan control"), fanNote, Pairs((fanMode, fanSource)), fanFixed,
             Section("Auto"), ceiling, adapt, foreground, activityGrid,
             Caption("When Auto can't tell what you're doing (no load readings), it uses these:"),
             Pairs((smartHot, smartCore), (smartPriority, smartInput)), smartIdle, smartIdleBelow,
-            Section("Curve"), presetRow, curveGrid, Pairs((fanHyst, smoothing), (rampUp, rampDown)), zeroRpm, zeroBelow,
+            curveFold,
             Section("Failsafes (all modes that write)"), Pairs((failCore, failHot), (failMem, null)),
-            Section("Auto safety net"), assistNote, assist, Pairs((assistHot, assistMem), (assistGap, assistBoost), (assistHold, assistMargin)),
+            assistFold,
             fanReset,
         }) panel.Children.Add(e);
 
@@ -499,6 +511,7 @@ internal static class SettingsDialog
                     Diag.Warn(DiagCategory.Settings, "settings not saved", new { problem });
                     error.Message = problem;
                     error.IsOpen = true;
+                    curveFold.IsExpanded = assistFold.IsExpanded = true; // the box at fault may be folded away
                     // It sits at the top of a long, scrolled dialog: Save was pressed 20+ times with it out of sight (log, 2026-10-21).
                     error.StartBringIntoView();
                     args.Cancel = true; // keep the dialog open so the user can fix it

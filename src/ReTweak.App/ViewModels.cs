@@ -200,7 +200,7 @@ public sealed partial class MainViewModel : Observable, IDisposable
         OfferPawnIo = hotspotState == HotspotAvailability.PawnIoMissing;
         HotspotNote = hotspotState switch
         {
-            HotspotAvailability.Available => "from the GPU via PawnIO",
+            HotspotAvailability.Available => "", // the normal case needs no line on the tile; the tooltip says where it comes from
             HotspotAvailability.PawnIoMissing => "Needs the optional PawnIO driver",
             HotspotAvailability.NeedsAdmin => "Run ReTweak as administrator to read it",
             _ => monitor.HotspotNote(_gpu),
