@@ -253,12 +253,13 @@ public sealed class GpuMonitor : IDisposable
     /// Sets the power limit to <paramref name="percent"/> of the card's default (clamped to what the driver
     /// allows); 100 restores the default. Needs administrator rights. Null on success, else why it failed.
     /// </summary>
-    public string? SetPowerLimitPercent(int gpuIndex, int percent)
+    public string? SetPowerLimitPercent(int gpuIndex, int percent, out double watts)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         var d = _devices[gpuIndex];
+        watts = 0;
         if (d.Limits is not { } l) return "this card doesn't report its power limits";
-        double watts = Math.Clamp(l.DefaultW * percent / 100.0, l.MinW, l.MaxW);
+        watts = Math.Clamp(l.DefaultW * percent / 100.0, l.MinW, l.MaxW);
         using var timer = Diag.Time("nvml.set_power_limit");
         int rc = Nvml.DeviceSetPowerManagementLimit(d.Nvml, (uint)Math.Round(watts * 1000));
         if (rc == Nvml.Success) return null;

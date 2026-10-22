@@ -13,6 +13,7 @@ using ReTweak.Core;
 // add --debug to any of these for a full diagnostic log
 // ReTweak.Cli --version          version and build number
 // ReTweak.Cli --security-check   audit ReTweak's files, autostart, PawnIO, data folders and Windows protections
+// ReTweak.Cli --hold-test        check the elevated folder holds against renames and junctions (admin)
 
 // --debug: full diagnostic log (JSON lines) to %LocalAppData%\ReTweak\diagnostics, like the app's --debug.
 if (args.Contains("--debug"))
@@ -35,6 +36,12 @@ if (args.Contains("--debug"))
 if (args.Contains("--version"))
 {
     Console.WriteLine($"ReTweak {BuildInfo.Display}");
+    return;
+}
+
+if (args.Contains("--hold-test"))
+{
+    Environment.ExitCode = HoldTest.Run();
     return;
 }
 
@@ -166,10 +173,7 @@ static int RunFan(GpuMonitor monitor, string mode, string[] args)
     {
         var s = monitor.Sample(gpu.Index, includeConnector: false);
         var fg = ReTweak.Core.Interop.Foreground.Read();
-        var st = fans.Tick(new FanTemps(s.CoreTempC, s.HotspotC, s.MemoryTempC, s.HotspotMaxC, s.LoadFraction,
-                                        s.MemoryChipMaxC, s.VrmMaxC,
-                                        new ActivitySample(s.GpuUtilization, s.MemoryUtilization, s.DecoderUtilization, s.EncoderUtilization,
-                                                           s.LoadFraction, fg.Fullscreen, fg.ProcessName)));
+        var st = fans.Tick(FanTemps.From(s, fg));
         Console.WriteLine($"{DateTime.Now:HH:mm:ss}  core {s.CoreTempC:F1} °C  fans {string.Join("/", s.FanPercents.Select(f => $"{f}%"))}  {st.Text}");
         if (st.NeedsAdmin) { result = 1; break; } // nothing to do until rerun as administrator
     } while (!done.Wait(1000) && (duration == Timeout.InfiniteTimeSpan || started.Elapsed < duration));

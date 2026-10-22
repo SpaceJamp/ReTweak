@@ -94,6 +94,9 @@ every folder on the way open, so none can be swapped for a junction mid-write. N
 copy of itself (`--fan-watchdog`) that waits for it; if ReTweak is killed or crashes, the watchdog hands every
 fan back to the driver's curve.
 
+`ReTweak.Cli --hold-test`, run as administrator, checks the folder holds on your PC: held folders can't be
+renamed, and junctions and folders outside your profile are refused.
+
 **Security check** (Settings → Security, or `ReTweak.Cli --security-check`, also in the diagnostics
 zip): a read-only audit of ReTweak's program folder (can your normal account change what the
 elevated logon task runs?), the bundled PawnIO module's hash, the logon task, the PawnIO driver's

@@ -27,6 +27,8 @@ public sealed record AppSettings
     /// driver allows. The driver resets it at reboot and ReTweak applies it again when it starts.
     /// </summary>
     public int PowerLimitPercent { get; init; } = 100;
+    /// <summary>The range accepted on load and in the Settings dialog (the driver's own range applies on top).</summary>
+    public const int PowerLimitMinPercent = 50, PowerLimitMaxPercent = 150;
 
     /// <summary>What <see cref="Load"/> had to replace with defaults, for the diagnostic log (it runs before logging starts).</summary>
     public static IReadOnlyList<string> LoadProblems { get; private set; } = [];
@@ -68,7 +70,7 @@ public sealed record AppSettings
         }
         string logFolder = string.IsNullOrWhiteSpace(s.LogFolder) ? new AppSettings().LogFolder : s.LogFolder;
         int powerLimit = s.PowerLimitPercent;
-        if (powerLimit is < 50 or > 150)
+        if (powerLimit < PowerLimitMinPercent || powerLimit > PowerLimitMaxPercent)
         {
             problems.Add($"power limit {powerLimit}% reset to 100%");
             powerLimit = 100;

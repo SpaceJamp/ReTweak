@@ -515,8 +515,15 @@ static class Simulate
         fake = new FakeFans { DriverSpeed = 40 };
         using (var fc = fake.Make(auto))
         {
-            var st = fake.Tick(fc, 60, hotspot: 87);
-            Check("Auto safety net: hotspot 27 °C above core", st.Assisting && fake.Speed == 60 && st.Text.Contains("cooler contact"), st.Text);
+            var st = fake.Tick(fc, 60, hotspot: 92);
+            Check("Auto safety net: hotspot 32 °C above core", st.Assisting && fake.Speed == 60 && st.Text.Contains("cooler contact"), st.Text);
+        }
+        // A healthy RTX 5080 reached a 25.9 °C gap for a second at 300+ W (logs, 2026-10-21): not a contact problem.
+        var healthy = new FakeFans { DriverSpeed = 40 };
+        using (var fc = healthy.Make(auto))
+        {
+            var st = healthy.Tick(fc, 60, hotspot: 86);
+            Check("Auto safety net: a healthy card's 26 °C gap doesn't trigger it", !st.Assisting && healthy.Speed is null, st.Text);
         }
         fake = new FakeFans { DriverSpeed = 40 };
         using (var fc = fake.Make(auto with { RampUpPerSecond = 10 }))
