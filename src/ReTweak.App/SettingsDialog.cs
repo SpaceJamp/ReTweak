@@ -188,6 +188,14 @@ internal static class SettingsDialog
         var smartHot = Num("Auto: hold the hotspot at (°C)", f.SmartTargetHotspotC);
         var smartCore = Num("Auto: without a hotspot, hold the core at (°C)", f.SmartTargetCoreC);
         foreach (var n in new[] { smartHot, smartCore }) n.SmallChange = 1;
+        var smartInput = new ComboBox
+        {
+            Header = "Auto: hold the target on", MinWidth = 220, SelectedIndex = (int)f.SmartInput,
+            ItemsSource = new[] { "Hotspot (fastest)", "Average of core, hotspot and memory (steadier)" },
+        };
+        ToolTipService.SetToolTip(smartInput, "The average moves less with every load change. It runs below the hotspot (about 2 °C at idle, " +
+                                              "about 11 °C in games on an RTX 5080), so pick targets for it. Failsafes, the ceiling and the memory " +
+                                              "and VRM limits always watch each sensor on its own.");
         var smartPriority = new ComboBox
         {
             Header = "Auto: favour", MinWidth = 220, SelectedIndex = (int)f.SmartPriority,
@@ -313,6 +321,7 @@ internal static class SettingsDialog
             fanSource.SelectedIndex = (int)d.Source;
             smartHot.Value = d.SmartTargetHotspotC; smartCore.Value = d.SmartTargetCoreC;
             smartPriority.SelectedIndex = (int)d.SmartPriority; smartIdle.IsOn = d.SmartIdleStop; smartIdleBelow.Value = d.SmartIdleStopBelowC;
+            smartInput.SelectedIndex = (int)d.SmartInput;
             ceiling.Value = d.CeilingC; adapt.IsOn = d.AdaptToActivity; foreground.IsOn = d.UseForegroundApp;
             FillActivities(d.Activities);
             fanFixed.Value = d.FixedPercent; fanHyst.Value = d.HysteresisC;
@@ -345,7 +354,7 @@ internal static class SettingsDialog
             Section("Fan control"), fanNote, Pairs((fanMode, fanSource)), fanFixed,
             Section("Auto"), ceiling, adapt, foreground, activityGrid,
             Caption("When Auto can't tell what you're doing (no load readings), it uses these:"),
-            Pairs((smartHot, smartCore), (smartPriority, null)), smartIdle, smartIdleBelow,
+            Pairs((smartHot, smartCore), (smartPriority, smartInput)), smartIdle, smartIdleBelow,
             Section("Curve"), presetRow, curveGrid, Pairs((fanHyst, smoothing), (rampUp, rampDown)), zeroRpm, zeroBelow,
             Section("Failsafes (all modes that write)"), Pairs((failCore, failHot), (failMem, null)),
             Section("Auto safety net"), assistNote, assist, Pairs((assistHot, assistMem), (assistGap, assistBoost), (assistHold, assistMargin)),
@@ -403,6 +412,7 @@ internal static class SettingsDialog
                 SmartTargetHotspotC = smartHot.Value,
                 SmartTargetCoreC = smartCore.Value,
                 SmartPriority = (SmartPriority)Math.Max(0, smartPriority.SelectedIndex),
+                SmartInput = (SmartInput)Math.Max(0, smartInput.SelectedIndex),
                 SmartIdleStop = smartIdle.IsOn,
                 SmartIdleStopBelowC = smartIdleBelow.Value,
                 CeilingC = ceiling.Value,

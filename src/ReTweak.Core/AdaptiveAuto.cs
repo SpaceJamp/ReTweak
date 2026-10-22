@@ -118,7 +118,11 @@ public sealed class ActivityClassifier
         bool notGame = FullscreenNotGames.Any(a => app.Contains(a, StringComparison.OrdinalIgnoreCase));
         if (fullscreen && load >= 25 && !notGame) return (ActivityKind.Gaming, $"fullscreen {app} at {load:F0}% load");
         if (load >= 40 && swing >= 0.03) return (ActivityKind.Gaming, $"{load:F0}% load, power swinging ±{swing * 100:F0}%");
-        if (load < 5 && (power ?? 0) < 0.15 && (dec ?? 0) < 2) return (ActivityKind.Idle, $"{load:F0}% load");
+        // Idle with hysteresis: idle load wanders around 3-7%, which flipped Idle/Desktop every 15-30 s (log, 2026-10-20).
+        bool idle = _current == ActivityKind.Idle
+            ? load < 10 && (power ?? 0) < 0.18 && (dec ?? 0) < 3
+            : load < 5 && (power ?? 0) < 0.15 && (dec ?? 0) < 2;
+        if (idle) return (ActivityKind.Idle, $"{load:F0}% load");
         return (ActivityKind.Desktop, $"{load:F0}% load");
     }
 
@@ -154,7 +158,13 @@ public sealed class AirflowModel
     public double Estimate(double powerFraction)
     {
         double p = Math.Clamp(powerFraction, 0, 1.2);
-        return 25 + 55 * Math.Min(p, 1) + Interpolate(p);
+        // Never less for more load: with only gaming power learned, the unlearned buckets above it estimated lower,
+        // and the look-ahead then dropped the fans 99% → 87% as a game's load came back after a dip (2026-10-21).
+        // Raw is linear between bucket points, so its max over [0, p] is at p or at one of them.
+        double Raw(double q) => 25 + 55 * Math.Min(q, 1) + Interpolate(q);
+        double estimate = Raw(p);
+        for (int i = 0; i < Buckets && i * 1.2 / (Buckets - 1) <= p; i++) estimate = Math.Max(estimate, Raw(i * 1.2 / (Buckets - 1)));
+        return estimate;
     }
 
     /// <summary>

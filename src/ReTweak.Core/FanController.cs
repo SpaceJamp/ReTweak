@@ -11,6 +11,18 @@ public enum FanMode { Driver = 0, Fixed = 1, Curve = 2, Smart = 3 }
 /// <summary>How the Smart (Auto) controller trades temperature accuracy against fan noise.</summary>
 public enum SmartPriority { Quiet, Balanced, Tight }
 
+/// <summary>What Auto holds at its target.</summary>
+public enum SmartInput
+{
+    /// <summary>The hotspot (the core without PawnIO): the hottest point, and the fastest to react.</summary>
+    Hotspot,
+    /// <summary>
+    /// The average of core, hotspot and memory: steadier, because the hotspot jumps with every load change
+    /// while memory moves slowly. Failsafes, the ceiling and the other limits still watch each sensor alone.
+    /// </summary>
+    Average,
+}
+
 /// <summary>Which temperature the curve follows.</summary>
 public enum FanSource { Core, Hotspot, Memory, Hottest }
 
@@ -93,6 +105,8 @@ public sealed record FanOptions
     /// <see cref="SmartIdleStopBelowC"/>, hand the fans to the driver so they can stop.
     /// </summary>
     public bool SmartIdleStop { get; init; }
+    /// <summary>What Auto holds at the activity targets: the hotspot, or the average of core, hotspot and memory.</summary>
+    public SmartInput SmartInput { get; init; } = SmartInput.Hotspot;
     /// <summary>Auto's 0 RPM threshold on the hotspot (8 °C lower on the core without one). Fans return 5 °C above it.</summary>
     public double SmartIdleStopBelowC { get; init; } = 50;
 
@@ -108,7 +122,8 @@ public sealed record FanOptions
         [ActivityKind.Idle] = new(60, SmartPriority.Quiet, 0),
         [ActivityKind.Desktop] = new(62, SmartPriority.Quiet, 0),
         [ActivityKind.Video] = new(62, SmartPriority.Quiet, 0),
-        [ActivityKind.Gaming] = new(70, SmartPriority.Tight, 5),
+        // Balanced, not Tight: games dip for seconds at a time and Tight's gain swung the fans 60-100% through them.
+        [ActivityKind.Gaming] = new(70, SmartPriority.Balanced, 5),
         [ActivityKind.Compute] = new(69, SmartPriority.Balanced, 3),
     };
 
@@ -166,14 +181,15 @@ public sealed record FanOptions
         if (AssistReleaseMarginC is < 1 or > 20) return "Safety-net release margin must be 1-20 °C.";
         if (AssistHoldSeconds is < 0 or > 600) return "Safety-net hold time must be 0-600 s.";
         if (AssistBoostPercent is < 0 or > 100) return "Safety-net boost must be 0-100 %.";
-        if (SmartTargetHotspotC is < 40 or > 105) return "Auto hotspot target must be 40-105 °C.";
+        // From 30: held on the average (core, hotspot, memory), an idle card sits in the mid 30s.
+        if (SmartTargetHotspotC is < 30 or > 105) return "Auto hotspot target must be 30-105 °C.";
         if (CeilingC != 0 && CeilingC is < 45 or > 110) return "Auto ceiling must be 45-110 °C (0 = off).";
         if (SmartTargetCoreC is < 35 or > 95) return "Auto core target must be 35-95 °C.";
         if (SmartTargetHotspotC >= FailsafeHotspotC) return "Auto hotspot target must be below the hotspot failsafe.";
         if (SmartTargetCoreC >= FailsafeTempC) return "Auto core target must be below the core failsafe.";
         foreach (var (kind, prof) in Activities)
         {
-            if (prof.TargetHotspotC is < 40 or > 105) return $"Auto {kind} target must be 40-105 °C.";
+            if (prof.TargetHotspotC is < 30 or > 105) return $"Auto {kind} target must be 30-105 °C.";
             if (prof.TargetHotspotC >= FailsafeHotspotC) return $"Auto {kind} target must be below the hotspot failsafe.";
             if (prof.LeadSeconds is < 0 or > 15) return $"Auto {kind} look-ahead must be 0-15 s.";
         }
@@ -264,6 +280,15 @@ public sealed class FanController : IDisposable
     private TimeSpan? _coolSince;
     private double _integral;        // Smart: accumulated correction, % fan
     private bool _smartRunning, _smartIdle;
+    private double? _envelope;
+    private TimeSpan _envelopeHeldUntil, _powerHeldUntil;
+    private bool _loadWasLow;
+    /// <summary>
+    /// While gaming or rendering, a high is held this long before a drop starts to count, then eases in over
+    /// HeavyEaseDownSeconds (see SmartTick). Without the hold, a 5 s loading screen (~50 W) still eased the fans
+    /// 86% → 68% in a real game (log, 2026-10-20); a longer ease alone didn't fix it.
+    /// </summary>
+    public const double HeavyEaseDownSeconds = 8, HeavyHoldSeconds = 6, HoldBandC = 1.5;
     private TimeSpan? _idleExitAt;
     private string? _smartInput;     // "hotspot" or "core": switching resets the controller
     private object? _lastSmart;      // this tick's controller terms, for the diagnostic log
@@ -405,13 +430,12 @@ public sealed class FanController : IDisposable
                 : new(o.Mode, null, $"Can't set fan speed: {_blocked}. Fans are on automatic.", AlertSeverity.Warning, _blockedByPermission);
 
         string? failsafe = Failsafe(o, temps);
-        var (source, sourceName) = o.Mode == FanMode.Smart
-            ? (temps.HotspotC ?? temps.CoreC, temps.HotspotC is null ? "core" : "hotspot")
-            : SourceTemp(o, temps);
+        var (source, sourceName) = o.Mode == FanMode.Smart ? SmartSource(o, temps) : SourceTemp(o, temps);
         if (o.Mode == FanMode.Smart && sourceName != _smartInput)
         {
             _smartInput = sourceName; // hotspot appeared or vanished: different scale, start over
             _smoothed = null;
+            _envelope = null;
             _smartRunning = false;
         }
         if (source is not double raw)
@@ -479,9 +503,34 @@ public sealed class FanController : IDisposable
         var profile = activity != ActivityKind.Unknown && o.Activities.TryGetValue(activity, out var p)
             ? p : new ActivityProfile(o.SmartTargetHotspotC, o.SmartPriority, 3);
         var tune = FanOptions.SmartTuning.For(profile.Priority);
-        double primaryTarget = input == "hotspot" ? profile.TargetHotspotC
+        // Games and renders dip for a few seconds (a menu, a lighter scene) and the hotspot follows the power
+        // within a second. Taken at face value each dip read as far below target and the fans swung 100% → 52%
+        // → 100% (log, 2026-10-20). Rises count at once; drops ease in over a few seconds, so a short dip barely
+        // registers while a real end of load still lets the fans down soon after. Not a hold: no added delay
+        // on the way up, so no limit cycle at a steady load.
+        // Attack/release: a new high counts at once and is held for HeavyHoldSeconds, then eases down. A loading
+        // screen shorter than the hold doesn't register at all.
+        bool heavy = activity is ActivityKind.Gaming or ActivityKind.Compute;
+        var nowT = _clock();
+        // A dip just ended (load back at its held level): the die cooled a little during it and needs a few seconds
+        // to warm back up. One more hold covers that, so the fans don't ease off just as the load returns.
+        bool loadLow = t.PowerFraction is double pfNow && double.IsFinite(pfNow) && pfNow < _leadHold - 0.05;
+        if (heavy && _loadWasLow && !loadLow) _envelopeHeldUntil = nowT + TimeSpan.FromSeconds(HeavyHoldSeconds);
+        _loadWasLow = heavy && loadLow;
+        // The hold restarts while the reading stays within its normal jitter of the high, so it counts from when a
+        // real drop began, not from the last noisy peak.
+        if (_envelope is not double env || !heavy || temp >= env - HoldBandC)
+        {
+            _envelope = _envelope is double e0 && heavy ? Math.Max(e0, temp) : temp;
+            _envelopeHeldUntil = nowT + TimeSpan.FromSeconds(HeavyHoldSeconds);
+        }
+        else if (nowT >= _envelopeHeldUntil)
+            _envelope = env + (temp - env) * dt / (HeavyEaseDownSeconds + dt);
+        temp = _envelope.Value;
+        bool targetScale = input is "hotspot" or "average"; // the activity targets are on the hotspot's scale
+        double primaryTarget = targetScale ? profile.TargetHotspotC
                              : activity == ActivityKind.Unknown ? o.SmartTargetCoreC : profile.TargetHotspotC - 8;
-        double primaryLimit = input == "hotspot" ? o.FailsafeHotspotC : o.FailsafeTempC;
+        double primaryLimit = targetScale ? o.FailsafeHotspotC : o.FailsafeTempC;
         double span = primaryLimit - primaryTarget;
 
         // 2. Every sensor votes, scaled to its own headroom: 0 = at its target, span = at its limit.
@@ -492,7 +541,7 @@ public sealed class FanController : IDisposable
         {
             if (value is double v && limit > target) votes.Add((name, v, target, (v - target) / (limit - target) * span));
         }
-        if (input == "hotspot") Vote("core", t.CoreC, o.FailsafeTempC - 8, o.FailsafeTempC);
+        if (input != "core") Vote("core", t.CoreC, o.FailsafeTempC - 8, o.FailsafeTempC);
         Vote("memory", t.MemoryC, o.MemoryTargetC, o.FailsafeMemoryC);
         Vote("memory chips", t.MemoryChipMaxC, o.MemoryChipTargetC, o.MemoryChipLimitC);
         Vote("VRM", t.VrmMaxC, o.VrmTargetC, o.VrmLimitC);
@@ -500,9 +549,11 @@ public sealed class FanController : IDisposable
         // Measured on the 1 s average, not the peak: the peak jumps ~±4 °C second to second, and steering on it
         // made the fans hunt between ~67% and 96% in a real game (diagnostic log, 2026-10-20). Failsafes still
         // use the peak.
-        double? ceilingInput = input == "hotspot" ? t.HotspotC : t.CoreC;
-        double ceiling = input == "hotspot" ? o.CeilingC : o.CeilingC - 8;
-        if (o.CeilingC > 0) Vote($"{input} ceiling", ceilingInput, ceiling - 3, ceiling);
+        // Always on the hotspot itself when there is one, whatever Auto steers on.
+        string ceilingName = t.HotspotC is not null ? "hotspot" : "core";
+        double? ceilingInput = t.HotspotC ?? t.CoreC;
+        double ceiling = t.HotspotC is not null ? o.CeilingC : o.CeilingC - 8;
+        if (o.CeilingC > 0) Vote($"{ceilingName} ceiling", ceilingInput, ceiling - 3, ceiling);
         var steer = votes.MaxBy(v => v.Error);
         double error = steer.Error;
 
@@ -517,7 +568,12 @@ public sealed class FanController : IDisposable
         // The projection fades out (2% of the limit per second) instead of snapping back when the ramp ends:
         // the heat from the ramp is still arriving then, and dropping the fans at that moment raised the peak.
         double projected = Math.Min(1.2, power + Math.Max(0, slope) * profile.LeadSeconds);
-        _leadHold = Math.Max(projected, Math.Max(power, _leadHold - 0.02 * dt));
+        // Gaming/rendering: the remembered load is held through short dips too (a loading screen at ~50 W), the same
+        // way as the temperature above. The learned airflow table can be steep around gaming power, so letting it
+        // fall at the normal rate still dropped the fans ~4 %/s.
+        if (heavy && power >= _leadHold - 0.05) _powerHeldUntil = nowT + TimeSpan.FromSeconds(HeavyHoldSeconds);
+        double decay = heavy && nowT < _powerHeldUntil ? 0 : 0.02 * dt;
+        _leadHold = Math.Max(projected, Math.Max(power, _leadHold - decay));
         double predicted = _leadHold;
 
         // 0 RPM: an absolute threshold, like the curve's, rather than a distance below the target. The old rule
@@ -527,7 +583,7 @@ public sealed class FanController : IDisposable
         bool lightActivity = activity is ActivityKind.Idle or ActivityKind.Desktop or ActivityKind.Video or ActivityKind.Unknown;
         if (o.SmartIdleStop && failsafe is null && lightActivity)
         {
-            double stopBelow = input == "hotspot" ? o.SmartIdleStopBelowC : o.SmartIdleStopBelowC - 8;
+            double stopBelow = targetScale ? o.SmartIdleStopBelowC : o.SmartIdleStopBelowC - 8;
             double others = votes.Skip(1).Select(v => v.Error).DefaultIfEmpty(double.MinValue).Max();
             // Once the fans come back they run at least a minute, so a card that idles near the threshold
             // cycles slowly instead of stopping and starting every few seconds.
@@ -609,7 +665,7 @@ public sealed class FanController : IDisposable
         if (_ceilingTicks >= 3) _ceilingWarning = true;
         else if (_ceilingTicks <= -3) _ceilingWarning = false;
         if (_ceilingWarning)
-            return Status = new(FanMode.Smart, _applied, $"Auto · {what}fans at maximum and {input} {ceilingInput:F0} °C is still over the {ceiling:F0} °C ceiling",
+            return Status = new(FanMode.Smart, _applied, $"Auto · {what}fans at maximum and {ceilingName} {ceilingInput:F0} °C is still over the {ceiling:F0} °C ceiling",
                                 AlertSeverity.Warning, SourceTempC: temp, Activity: activity, Steering: steer.Name);
         return Status = new(FanMode.Smart, _applied, $"Auto · {what}{_applied}% · {steer.Name} {steer.Value:F1} °C → {steer.Target:F0} °C",
                             SourceTempC: temp, Activity: activity, Steering: steer.Name);
@@ -705,6 +761,14 @@ public sealed class FanController : IDisposable
         }
         _applied = write;
         return null;
+    }
+
+    /// <summary>Auto's input: the hotspot (core without one), or the average of core, hotspot and memory.</summary>
+    private static (double? Temp, string Name) SmartSource(FanOptions o, FanTemps t)
+    {
+        if (o.SmartInput == SmartInput.Average && new[] { t.CoreC, t.HotspotC, t.MemoryC }.OfType<double>().ToList() is { Count: >= 2 } v)
+            return (v.Average(), "average");
+        return (t.HotspotC ?? t.CoreC, t.HotspotC is null ? "core" : "hotspot");
     }
 
     private static (double? Temp, string Name) SourceTemp(FanOptions o, FanTemps t)
