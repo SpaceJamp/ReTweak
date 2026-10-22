@@ -244,6 +244,7 @@ public sealed partial class MainViewModel : Observable, IDisposable
 
     private int? _powerLimitApplied;
     private readonly PowerEmergency _emergency = new();
+    private double _emergencyWatts;
 
     /// <summary>The card's power range for the Settings dialog, or null if it doesn't report one.</summary>
     public string? PowerLimitInfo => _monitor.PowerLimits(_gpu) is { } l
@@ -270,6 +271,8 @@ public sealed partial class MainViewModel : Observable, IDisposable
         if (action == PowerEmergency.Action.Cut)
         {
             string? error = _monitor.SetPowerLimitPercent(_gpu, 0, out double watts); // 0 % clamps to the driver's minimum
+            _emergencyWatts = watts;
+            RefreshStatus();
             _powerLimitApplied = 0; // so the restore below always puts the user's limit back, even 100 %
             Diag.Warn(DiagCategory.Fan, "emergency power cut", new { watts = Math.Round(watts), error, status = st.Text });
             Notifications.ShowInfo("ReTweak: emergency power cut",
@@ -279,6 +282,7 @@ public sealed partial class MainViewModel : Observable, IDisposable
         else if (action == PowerEmergency.Action.Restore)
         {
             ApplyPowerLimit(_settings.PowerLimitPercent);
+            RefreshStatus();
             Diag.Info(DiagCategory.Fan, "emergency power cut over", new { percent = _settings.PowerLimitPercent });
             Notifications.ShowInfo("ReTweak: power back to normal", $"Cool again for {PowerEmergency.ReleaseAfter.TotalSeconds:F0} s; your power limit is back.");
         }
@@ -412,6 +416,12 @@ public sealed partial class MainViewModel : Observable, IDisposable
             : (s.HotspotC is not null ? "Auto sees (PawnIO): " : "Auto sees (install PawnIO for more): ") + string.Join(", ", inputs);
         FanNeedsAdmin = st.NeedsAdmin && !autoUnelevated && !Elevation.IsAdmin;
         FanStatusBrush = st.Severity > AlertSeverity.None ? Theme.For(st.Severity) : st.Mode == FanMode.Driver ? Theme.Muted : Theme.Ok;
+        if (_emergency.Active)
+        {
+            FanStatus = $"Emergency power cut to {_emergencyWatts:F0} W: fans are at full speed and still at a failsafe. " +
+                        $"Your limit comes back after {PowerEmergency.ReleaseAfter.TotalSeconds:F0} s without one. {FanStatus}";
+            FanStatusBrush = Theme.Critical;
+        }
         FanChanged?.Invoke();
     }
 
@@ -484,6 +494,12 @@ public sealed partial class MainViewModel : Observable, IDisposable
         Status = worst is null ? "All clear" : $"{worst.Severity}: {worst.Title}";
         StatusBrush = Theme.For(worst?.Severity ?? AlertSeverity.None);
         _worst = worst?.Severity ?? AlertSeverity.None;
+        if (_emergency.Active) // outranks any alert: ReTweak itself is holding the card back right now
+        {
+            Status = $"Emergency power cut · {_emergencyWatts:F0} W";
+            StatusBrush = Theme.Critical;
+            _worst = AlertSeverity.Critical;
+        }
         StatusChanged?.Invoke();
     }
 
