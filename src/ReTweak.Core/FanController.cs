@@ -157,8 +157,10 @@ public sealed record FanOptions
             var p = Curve[i];
             if (p.TempC is < 20 or > 110) return $"Curve point {i + 1}: temperature must be 20-110 °C.";
             if (p.Percent is < 0 or > 100) return $"Curve point {i + 1}: fan speed must be 0-100 %.";
-            if (i > 0 && p.TempC <= Curve[i - 1].TempC) return $"Curve point {i + 1}: temperatures must increase from point to point.";
-            if (i > 0 && p.Percent < Curve[i - 1].Percent) return $"Curve point {i + 1}: fan speed can't drop as temperature rises.";
+            if (i > 0 && p.TempC <= Curve[i - 1].TempC)
+                return $"Curve point {i + 1} is {p.TempC:0} °C; it must be above point {i} ({Curve[i - 1].TempC:0} °C).";
+            if (i > 0 && p.Percent < Curve[i - 1].Percent)
+                return $"Curve point {i + 1} is {p.Percent} %; it can't be below point {i} ({Curve[i - 1].Percent} %): fan speed can't drop as temperature rises.";
         }
         if (HysteresisC is < 0 or > 10) return "Hysteresis must be 0-10 °C.";
         if (FailsafeTempC is < 40 or > 110) return "Core failsafe must be 40-110 °C.";

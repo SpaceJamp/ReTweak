@@ -67,10 +67,15 @@ try {
     # Any right that changes the folder or what's in it: write/append data, attributes, delete, delete children,
     # change permissions, take ownership, and GENERIC_WRITE / GENERIC_ALL (inherited entries use those).
     $changeMask = 0x2 -bor 0x4 -bor 0x10 -bor 0x40 -bor 0x100 -bor 0x10000 -bor 0x40000 -bor 0x80000 -bor 0x40000000 -bor 0x10000000
-    $writers = $acl.Access | Where-Object {
-        $_.AccessControlType -eq 'Allow' -and (([int64][int]$_.FileSystemRights) -band $changeMask) -and
-        $_.IdentityReference.Value -notmatch '^(NT AUTHORITY\\SYSTEM|BUILTIN\\Administrators|NT SERVICE\\TrustedInstaller|CREATOR OWNER|APPLICATION PACKAGE AUTHORITY\\.*)$' }
-    if ($writers) { throw "$target can be changed by $(($writers.IdentityReference | Select-Object -Unique) -join ', '); fix its permissions or delete it, then run again." }
+    # By SID, not name: account names are translated on non-English Windows ("VORDEFINIERT\Administratoren").
+    # SYSTEM, Administrators, TrustedInstaller, CREATOR OWNER, ALL (RESTRICTED) APPLICATION PACKAGES.
+    $trusted = 'S-1-5-18', 'S-1-5-32-544', 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464', 'S-1-3-0', 'S-1-15-2-1', 'S-1-15-2-2'
+    $writers = $acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]) | Where-Object {
+        $_.AccessControlType -eq 'Allow' -and (([int64][int]$_.FileSystemRights) -band $changeMask) -and $trusted -notcontains $_.IdentityReference.Value }
+    if ($writers) {
+        $who = $writers | ForEach-Object { try { $_.IdentityReference.Translate([Security.Principal.NTAccount]).Value } catch { $_.IdentityReference.Value } } | Select-Object -Unique
+        throw "$target can be changed by $($who -join ', '); fix its permissions or delete it, then run again."
+    }
 
     Write-Host "Copying..."
     & "$env:SystemRoot\System32\robocopy.exe" $Source $target /MIR /NJH /NJS /NP /NFL /NDL | Out-Null

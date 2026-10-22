@@ -498,6 +498,8 @@ internal static class SettingsDialog
                     Diag.Warn(DiagCategory.Settings, "settings not saved", new { problem });
                     error.Message = problem;
                     error.IsOpen = true;
+                    // It sits at the top of a long, scrolled dialog: Save was pressed 20+ times with it out of sight (log, 2026-10-21).
+                    error.StartBringIntoView();
                     args.Cancel = true; // keep the dialog open so the user can fix it
                     return;
                 }
