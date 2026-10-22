@@ -56,6 +56,7 @@ static class Simulate
         FanCheck();
         SmartCheck();
         HardeningCheck();
+        PowerEmergencyCheck();
         AdaptiveCheck();
         TrustedPathsCheck();
 
@@ -636,6 +637,28 @@ static class Simulate
             run.FanPercent.Add(fake.Speed ?? driverSpeed);
         }
         return run with { Airflow = fc.Airflow.Corrections.ToArray() };
+    }
+
+    /// <summary>The hail mary: power cut only when full fans can't hold a failsafe, and given back once cool.</summary>
+    private static void PowerEmergencyCheck()
+    {
+        var e = new PowerEmergency();
+        var acts = new List<PowerEmergency.Action>();
+        TimeSpan T(int s) => TimeSpan.FromSeconds(s);
+        for (int s = 0; s < 9; s++) acts.Add(e.Update(true, true, T(s)));           // 9 s: not yet
+        acts.Add(e.Update(false, true, T(9)));                                        // a cooler second resets it
+        for (int s = 10; s < 20; s++) acts.Add(e.Update(true, false, T(s)));          // hot, but fans not at max: never
+        bool quietSoFar = acts.All(a => a == PowerEmergency.Action.None);
+        PowerEmergency.Action cut = PowerEmergency.Action.None;
+        for (int s = 20; s <= 30; s++) cut = e.Update(true, true, T(s)) is var a && a != PowerEmergency.Action.None ? a : cut;
+        var stillHot = e.Update(true, true, T(60));                                   // no repeat while active
+        var early = e.Update(false, true, T(61));
+        var restore = PowerEmergency.Action.None;
+        for (int s = 62; s <= 125; s++) restore = e.Update(false, false, T(s)) is var a && a != PowerEmergency.Action.None ? a : restore;
+        Check("Hail mary: power cut after 10 s of failsafe at full fans, restored after 60 s cool",
+              quietSoFar && cut == PowerEmergency.Action.Cut && stillHot == PowerEmergency.Action.None && early == PowerEmergency.Action.None
+              && restore == PowerEmergency.Action.Restore && !e.Active,
+              $"before: {(quietSoFar ? "nothing" : "fired early")}, at 30 s: {cut}, after cooling: {restore}");
     }
 
     /// <summary>Failure handling found in the 2026-10-20 sweep.</summary>

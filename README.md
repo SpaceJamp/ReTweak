@@ -94,6 +94,11 @@ every folder on the way open, so none can be swapped for a junction mid-write. N
 copy of itself (`--fan-watchdog`) that waits for it; if ReTweak is killed or crashes, the watchdog hands every
 fan back to the driver's curve.
 
+**Emergency power cut**: if the fans are already at full speed and a sensor stays at its failsafe for 10 s,
+ReTweak lowers the power limit to the driver's minimum (with a notification) and gives your limit back after
+60 s without a failsafe. The card's own firmware still throttles near its limit; this acts earlier, at your
+failsafe temperatures.
+
 `ReTweak.Cli --hold-test`, run as administrator, checks the folder holds on your PC: held folders can't be
 renamed, and junctions and folders outside your profile are refused.
 
