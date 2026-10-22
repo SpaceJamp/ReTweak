@@ -348,6 +348,9 @@ public sealed class FanController : IDisposable
 
     public (int Min, int Max) Range => _range;
 
+    /// <summary>A sensor was at its failsafe on the last tick (for <see cref="PowerEmergency"/>).</summary>
+    public bool FailsafeActive { get; private set; }
+
     public FanOptions Options
     {
         get => _options;
@@ -444,6 +447,7 @@ public sealed class FanController : IDisposable
                 : new(o.Mode, null, $"Can't set fan speed: {_blocked}. Fans are on automatic.", AlertSeverity.Warning, _blockedByPermission);
 
         string? failsafe = Failsafe(o, temps);
+        FailsafeActive = failsafe is not null;
         var (source, sourceName) = o.Mode == FanMode.Smart ? SmartSource(o, temps) : SourceTemp(o, temps);
         if (o.Mode == FanMode.Smart && sourceName != _smartInput)
         {

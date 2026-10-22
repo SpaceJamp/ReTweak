@@ -243,6 +243,7 @@ public sealed partial class MainViewModel : Observable, IDisposable
     }
 
     private int? _powerLimitApplied;
+    private readonly PowerEmergency _emergency = new();
 
     /// <summary>The card's power range for the Settings dialog, or null if it doesn't report one.</summary>
     public string? PowerLimitInfo => _monitor.PowerLimits(_gpu) is { } l
@@ -253,12 +254,34 @@ public sealed partial class MainViewModel : Observable, IDisposable
     /// <summary>Sets the power limit when it changes. 100 % at startup leaves the card alone (another tool may own it).</summary>
     private void ApplyPowerLimit(int percent)
     {
-        if (percent == (_powerLimitApplied ?? 100) || !Elevation.IsAdmin || _monitor.PowerLimits(_gpu) is null) return;
+        // During a hail-mary cut, a Settings save must not put the power back early: the cut ends by itself.
+        if (_emergency.Active || percent == (_powerLimitApplied ?? 100) || !Elevation.IsAdmin || _monitor.PowerLimits(_gpu) is null) return;
         string? error = _monitor.SetPowerLimitPercent(_gpu, percent, out double watts);
         if (error is null) _powerLimitApplied = percent;
         // watts is what the driver got: a % outside its range is clamped (50 % became 250 W, 62.5 %, on an RTX 5080).
         Diag.Write(error is null ? DiagLevel.Info : DiagLevel.Warn, DiagCategory.Settings,
                    error is null ? "power limit set" : "power limit not set", new { percent, watts = Math.Round(watts), error });
+    }
+
+    /// <summary>Full fans can't hold a failsafe: cut the power to the driver's minimum until it cools (PowerEmergency).</summary>
+    private void HailMary(FanStatus st)
+    {
+        var action = _emergency.Update(_fan!.FailsafeActive, st.Percent >= _fan.Range.Max, TimeSpan.FromMilliseconds(Environment.TickCount64));
+        if (action == PowerEmergency.Action.Cut)
+        {
+            string? error = _monitor.SetPowerLimitPercent(_gpu, 0, out double watts); // 0 % clamps to the driver's minimum
+            _powerLimitApplied = 0; // so the restore below always puts the user's limit back, even 100 %
+            Diag.Warn(DiagCategory.Fan, "emergency power cut", new { watts = Math.Round(watts), error, status = st.Text });
+            Notifications.ShowInfo("ReTweak: emergency power cut",
+                error is null ? $"Fans are at full speed and still at a failsafe. Power is limited to {watts:F0} W until it cools."
+                              : $"Fans are at full speed and still at a failsafe, and the power limit couldn't be lowered: {error}.");
+        }
+        else if (action == PowerEmergency.Action.Restore)
+        {
+            ApplyPowerLimit(_settings.PowerLimitPercent);
+            Diag.Info(DiagCategory.Fan, "emergency power cut over", new { percent = _settings.PowerLimitPercent });
+            Notifications.ShowInfo("ReTweak: power back to normal", $"Cool again for {PowerEmergency.ReleaseAfter.TotalSeconds:F0} s; your power limit is back.");
+        }
     }
 
     /// <summary>Applies settings live: thresholds from the next frame, logging on/off, toasts.</summary>
@@ -372,6 +395,7 @@ public sealed partial class MainViewModel : Observable, IDisposable
             _fan.ReleaseToDriver();
             st = new(_fan.Options.Mode, null, $"Fan control error: {ex.Message}. The driver has the fans.", AlertSeverity.Warning);
         }
+        HailMary(st);
         FanTempC = st.SourceTempC ?? s.CoreTempC;
         // Unelevated, Auto is simply the driver's curve; mention the safety net quietly instead of
         // nagging with the restart button (that's for Fixed and Curve, which can't work at all).
