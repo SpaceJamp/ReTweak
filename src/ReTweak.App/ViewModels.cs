@@ -242,6 +242,24 @@ public sealed partial class MainViewModel : Observable, IDisposable
         PollGpu();
     }
 
+    private int? _powerLimitApplied;
+
+    /// <summary>The card's power range for the Settings dialog, or null if it doesn't report one.</summary>
+    public string? PowerLimitInfo => _monitor.PowerLimits(_gpu) is { } l
+        ? $"default {l.DefaultW:F0} W; the driver allows {l.MinW / l.DefaultW * 100:F0}-{l.MaxW / l.DefaultW * 100:F0} %" +
+          (Elevation.IsAdmin ? "" : ". Needs ReTweak running as administrator.")
+        : null;
+
+    /// <summary>Sets the power limit when it changes. 100 % at startup leaves the card alone (another tool may own it).</summary>
+    private void ApplyPowerLimit(int percent)
+    {
+        if (percent == (_powerLimitApplied ?? 100) || !Elevation.IsAdmin || _monitor.PowerLimits(_gpu) is null) return;
+        string? error = _monitor.SetPowerLimitPercent(_gpu, percent);
+        if (error is null) _powerLimitApplied = percent;
+        Diag.Write(error is null ? DiagLevel.Info : DiagLevel.Warn, DiagCategory.Settings,
+                   error is null ? "power limit set" : "power limit not set", new { percent, error });
+    }
+
     /// <summary>Applies settings live: thresholds from the next frame, logging on/off, toasts.</summary>
     public void Apply(AppSettings settings)
     {
@@ -250,6 +268,7 @@ public sealed partial class MainViewModel : Observable, IDisposable
         _settings = settings;
         Notifications.Enabled = settings.Toasts;
         _alerts.Options = settings.Alerts;
+        ApplyPowerLimit(settings.PowerLimitPercent);
         if (_fan is not null)
         {
             _fan.Options = settings.Fans;
@@ -314,7 +333,10 @@ public sealed partial class MainViewModel : Observable, IDisposable
         Power = s.PowerWatts is double w ? $"{w:F0} W" : "-";
         PowerLimit = s.PowerLimitWatts is double l ? $"of {l:F0} W limit" : "";
         PowerPercent = s.PowerWatts is double pw && s.PowerLimitWatts is double pl && pl > 0 ? Math.Clamp(pw / pl * 100, 0, 100) : 0;
-        Fans = s.FanPercents.Count > 0 ? string.Join(" / ", s.FanPercents.Select(f => $"{f}%")) : "-";
+        // Each fan's target: ReTweak drives them all to the same %; their measured speeds wander a % apart.
+        Fans = s.FanPercents.Count > 0
+            ? string.Join(" / ", s.FanPercents.Select((f, i) => $"{_monitor.FanTarget(_gpu, i) ?? (int)f}%"))
+            : "-";
         CurrentFanPercent = s.FanPercents.Count > 0 ? s.FanPercents.Average(f => (double)f) : null;
         if (s.VramTotalBytes is ulong total && s.VramUsedBytes is ulong used)
         {
@@ -330,10 +352,10 @@ public sealed partial class MainViewModel : Observable, IDisposable
         FanStatus st;
         var fg = _fan.Options.UseForegroundApp ? ReTweak.Core.Interop.Foreground.Read() : ReTweak.Core.Interop.ForegroundApp.None;
         var activity = new ActivitySample(s.GpuUtilization, s.MemoryUtilization, s.DecoderUtilization, s.EncoderUtilization,
-                                          s.PowerWatts / s.PowerLimitWatts, fg.Fullscreen, fg.ProcessName);
+                                          s.LoadFraction, fg.Fullscreen, fg.ProcessName);
         try
         {
-            st = _fan.Tick(new FanTemps(s.CoreTempC, s.HotspotC, s.MemoryTempC, s.HotspotMaxC, s.PowerWatts / s.PowerLimitWatts,
+            st = _fan.Tick(new FanTemps(s.CoreTempC, s.HotspotC, s.MemoryTempC, s.HotspotMaxC, s.LoadFraction,
                                         s.MemoryChipMaxC, s.VrmMaxC, activity));
         }
         catch (Exception ex)

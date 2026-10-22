@@ -8,7 +8,8 @@ namespace ReTweak.App;
 internal static class SettingsDialog
 {
     /// <param name="saveDiagnostics">Writes the diagnostics zip and returns its path.</param>
-    public static async Task<AppSettings?> ShowAsync(XamlRoot root, AppSettings current, string? activeLogPath, Func<string> saveDiagnostics)
+    public static async Task<AppSettings?> ShowAsync(XamlRoot root, AppSettings current, string? activeLogPath, Func<string> saveDiagnostics,
+                                                     string? powerLimitInfo)
     {
         var o = current.Alerts;
 
@@ -191,10 +192,10 @@ internal static class SettingsDialog
         var smartInput = new ComboBox
         {
             Header = "Auto: hold the target on", MinWidth = 220, SelectedIndex = (int)f.SmartInput,
-            ItemsSource = new[] { "Hotspot (fastest)", "Average of core, hotspot and memory (steadier)" },
+            ItemsSource = new[] { "Hotspot (fastest)", "Average of core and hotspot (steadier)" },
         };
         ToolTipService.SetToolTip(smartInput, "The average moves less with every load change. It runs below the hotspot (about 2 °C at idle, " +
-                                              "about 11 °C in games on an RTX 5080), so pick targets for it. Failsafes, the ceiling and the memory " +
+                                              "about 5 °C in games on an RTX 5080), so pick targets for it. Failsafes, the ceiling and the memory " +
                                               "and VRM limits always watch each sensor on its own.");
         var smartPriority = new ComboBox
         {
@@ -202,6 +203,11 @@ internal static class SettingsDialog
             ItemsSource = new[] { "Quiet (slow, rare changes)", "Balanced", "Tight (holds within ~1 °C)" },
         };
         var smartIdle = new ToggleSwitch { Header = "Auto: 0 RPM at light load (idle, desktop, video)", IsOn = f.SmartIdleStop };
+        var powerLimit = Num($"Power limit (% of the card's default{(powerLimitInfo is null ? "" : $"; {powerLimitInfo}")})", current.PowerLimitPercent);
+        powerLimit.SmallChange = 5;
+        powerLimit.IsEnabled = powerLimitInfo is not null;
+        ToolTipService.SetToolTip(powerLimit, "Less power means less heat for the fans to move, for a few % of performance (often less with DLSS). " +
+                                              "100 % is the card's default. The driver resets it at reboot; ReTweak sets it again when it starts.");
         var smartIdleBelow = Num("Auto: 0 RPM below (°C hotspot; fans return 5 °C above)", f.SmartIdleStopBelowC);
         smartIdleBelow.SmallChange = 1;
         var ceiling = Num("Auto: keep the hotspot under (°C, 0 = no ceiling)", f.CeilingC);
@@ -351,6 +357,7 @@ internal static class SettingsDialog
             Section("Security"), Caption("Checks ReTweak's files, autostart, the PawnIO driver, data folders, known UAC-bypass entries, " +
                                          "risky drivers and Windows protections. Read-only."), runSecurity, securityResults,
             Section("Alert thresholds"), grid, reset,
+            Section("Power"), powerLimit,
             Section("Fan control"), fanNote, Pairs((fanMode, fanSource)), fanFixed,
             Section("Auto"), ceiling, adapt, foreground, activityGrid,
             Caption("When Auto can't tell what you're doing (no load readings), it uses these:"),
@@ -399,6 +406,7 @@ internal static class SettingsDialog
                 CriticalDieSpreadC = dieCrit.Value,
             };
             problem ??= AppSettings.Validate(alerts);
+            if (powerLimit.Value is < 50 or > 150) problem ??= "Power limit must be 50-150 % (the driver's own range applies on top).";
 
             var fanBoxes = curveTemps.Concat(curvePcts).Concat(new[]
             {
@@ -454,6 +462,7 @@ internal static class SettingsDialog
                 Toasts = toasts.IsOn,
                 LogConnector = log.IsOn,
                 LogFolder = logFolder.Text.Trim(),
+                PowerLimitPercent = double.IsNaN(powerLimit.Value) ? 100 : (int)Math.Round(powerLimit.Value),
                 DiagnosticsLevel = Diagnostics.ForcedByArg ? current.DiagnosticsLevel
                     : diagLevel.SelectedIndex switch { 1 => DiagLevel.Info, 2 => DiagLevel.Debug, 3 => DiagLevel.Trace, _ => DiagLevel.Off },
             };

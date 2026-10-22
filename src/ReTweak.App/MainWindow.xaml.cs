@@ -115,7 +115,8 @@ public sealed partial class MainWindow : Window
 
     private async void Settings_Click(object sender, RoutedEventArgs e)
     {
-        var saved = await SettingsDialog.ShowAsync(Content.XamlRoot, ViewModel.Settings, ViewModel.LogPath, ViewModel.SaveDiagnostics);
+        var saved = await SettingsDialog.ShowAsync(Content.XamlRoot, ViewModel.Settings, ViewModel.LogPath, ViewModel.SaveDiagnostics,
+                                                 ViewModel.PowerLimitInfo);
         if (saved is not null) ViewModel.Apply(saved);
     }
 
@@ -268,7 +269,7 @@ public sealed partial class MainWindow : Window
         }
         // Axis titles.
         var axisSource = o.Mode switch { FanMode.Driver => FanSource.Core, FanMode.Smart => FanSource.Hotspot, _ => o.Source };
-        string axisName = o.Mode == FanMode.Smart && o.SmartInput == SmartInput.Average ? "Average (core, hotspot, memory)"
+        string axisName = o.Mode == FanMode.Smart && o.SmartInput == SmartInput.Average ? "Average (core, hotspot)"
             : FanOptions.SourceName(axisSource) switch { "core" => "GPU core", "hottest" => "Hottest sensor", var n => char.ToUpper(n[0]) + n[1..] };
         var xTitle = Label($"{axisName} temperature (°C)", 12);
         xTitle.Foreground = axis;
