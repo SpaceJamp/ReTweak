@@ -11,7 +11,7 @@ public static class Program
     [STAThread]
     private static int Main(string[] args)
     {
-        if (args is [FanWatchdog.Arg, var pid]) return FanWatchdog.Run(pid);
+        if (args is [FanWatchdog.Arg, var pid]) return FanWatchdog.Run(pid, Native.TrayIcon.WindowClass);
         XamlGeneratedProgram.XamlGeneratedMain();
         return 0;
     }

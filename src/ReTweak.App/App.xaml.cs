@@ -73,7 +73,7 @@ public partial class App : Application
         };
         _ = Task.Run(() =>
         {
-            Autostart.MigrateIfElevated(); // old Run-key entry -> logon task; build-folder task -> installed copy
+            Autostart.MigrateIfElevated(); // build-folder task -> installed copy
             if (!Diag.IsOn(DiagLevel.Info)) return;
             // After the migration, so the check sees the task as it now is.
             var findings = Diagnostics.RunSecurityCheck(settings);

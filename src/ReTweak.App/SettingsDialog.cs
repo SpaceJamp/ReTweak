@@ -23,8 +23,6 @@ internal static class SettingsDialog
         {
             Text = startState switch
             {
-                AutostartState.Legacy => "Set up by an older ReTweak, which starts without administrator rights (no hotspot). " +
-                                         "Save to switch to the elevated start; Windows asks for permission once.",
                 AutostartState.Stale => "Registered for a ReTweak in another folder. Save to point it at this one" +
                                         (Autostart.IsAdmin ? "." : "; Windows asks for permission once."),
                 _ => "Uses a Task Scheduler logon task with highest privileges, so ReTweak starts elevated without a prompt" +
