@@ -1035,7 +1035,8 @@ static class Simulate
                 using var w = new BinaryWriter(f);
                 foreach (double t in temps) w.Write((1u << 30) | (uint)(t * 256));
             }
-            using (var reader = NvidiaHotspot.TryCreateLinux(dir, out var state, out string why))
+            string noModule = Path.Combine(dir, "no-module");
+            using (var reader = NvidiaHotspot.TryCreateLinux(dir, noModule, out var state, out string why))
             {
                 var got = reader?.Read();
                 bool same = got is { Length: 6 } && got.Zip(temps).All(p => p.First == p.Second);
@@ -1044,9 +1045,20 @@ static class Simulate
                 Check("Linux hotspot: no memory chips without PawnIO", reader?.ReadMemoryChips() is null, "");
             }
 
+            // The kernel module's file, in the module's format; it wins over the mapping.
+            string moduleFile = Path.Combine(dir, "channels");
+            File.WriteAllText(moduleFile, string.Join(' ', temps.Select(t => ((1u << 30) | (uint)(t * 256)).ToString("x8"))) + "\n");
+            using (var reader = NvidiaHotspot.TryCreateLinux(dir, moduleFile, out var state, out string why))
+            {
+                var got = reader?.Read();
+                bool same = got is { Length: 6 } && got.Zip(temps).All(p => p.First == p.Second);
+                Check("Linux hotspot: reads the retweak_hotspot module's file first", same && reader!.Source == "retweak_hotspot module",
+                      got is null ? why : $"{reader!.Source}: {string.Join(", ", got)}");
+            }
+
             File.WriteAllText(Path.Combine(dir, "vendor"), "0x1002\n");
-            bool refused = NvidiaHotspot.TryCreateLinux(dir, out var other, out _) is null && other == HotspotAvailability.Unsupported;
-            bool missing = NvidiaHotspot.TryCreateLinux(Path.Combine(dir, "nope"), out var gone, out _) is null && gone == HotspotAvailability.Unsupported;
+            bool refused = NvidiaHotspot.TryCreateLinux(dir, noModule, out var other, out _) is null && other == HotspotAvailability.Unsupported;
+            bool missing = NvidiaHotspot.TryCreateLinux(Path.Combine(dir, "nope"), noModule, out var gone, out _) is null && gone == HotspotAvailability.Unsupported;
             Check("Linux hotspot: refuses a non-NVIDIA device and a missing one", refused && missing, $"{other}, {gone}");
         }
         finally { Directory.Delete(dir, recursive: true); }

@@ -5,3 +5,11 @@ obj/
 logs/
 __pycache__/
 artifacts/
+# kernel module build outputs
+*.ko
+*.o
+*.mod
+*.mod.c
+.*.cmd
+Module.symvers
+modules.order
