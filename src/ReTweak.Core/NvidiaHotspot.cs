@@ -45,9 +45,10 @@ public sealed class NvidiaHotspot : IDisposable
     private const long ChannelOffset = 0xAD0A90;
     private const string NvidiaVendor = "0x10de";
 
-    // Exactly one backend: PawnIO on Windows, a read-only BAR0 mapping on Linux.
+    // Exactly one backend: PawnIO on Windows; on Linux the retweak_hotspot module's file, or a read-only BAR0 mapping.
     private readonly PawnIo? _pawnIo;
     private readonly LinuxBar0? _bar0;
+    private readonly string? _moduleFile;
     private readonly long[] _pciAddress = [];
 
     private NvidiaHotspot(PawnIo pawnIo, uint bus, uint device, uint function)
@@ -57,13 +58,27 @@ public sealed class NvidiaHotspot : IDisposable
     }
 
     private NvidiaHotspot(LinuxBar0 bar0) => _bar0 = bar0;
+    private NvidiaHotspot(string moduleFile) => _moduleFile = moduleFile;
+
+    /// <summary>How the registers are read, for the note under the value.</summary>
+    public string Source => _moduleFile is not null ? "retweak_hotspot module" : _bar0 is not null ? "BAR0, read-only" : "PawnIO";
 
     /// <summary>
-    /// Linux: maps the registers from the GPU's sysfs folder (/sys/bus/pci/devices/0000:01:00.0), read-only.
-    /// Null when unavailable; <paramref name="reason"/> then says why, in words for the user.
+    /// Linux: reads <paramref name="moduleFile"/> from the retweak_hotspot kernel module (linux/retweak-hotspot) if it's
+    /// loaded; any user can read it. Otherwise, as root, maps the registers read-only from the GPU's sysfs folder
+    /// (/sys/bus/pci/devices/0000:01:00.0). Null when unavailable; <paramref name="reason"/> then says why, in words for the user.
     /// </summary>
-    public static NvidiaHotspot? TryCreateLinux(string pciDeviceFolder, out HotspotAvailability availability, out string reason)
+    public static NvidiaHotspot? TryCreateLinux(string pciDeviceFolder, string moduleFile, out HotspotAvailability availability, out string reason)
     {
+        if (File.Exists(moduleFile))
+        {
+            var fromModule = new NvidiaHotspot(moduleFile);
+            if (fromModule.ReadChannels() is not null)
+            {
+                (availability, reason) = (HotspotAvailability.Available, "");
+                return fromModule;
+            }
+        }
         string vendor;
         try { vendor = File.ReadAllText(Path.Combine(pciDeviceFolder, "vendor")).Trim(); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
@@ -78,7 +93,7 @@ public sealed class NvidiaHotspot : IDisposable
             return null;
         }
         var bar0 = LinuxBar0.TryOpen(Path.Combine(pciDeviceFolder, "resource0"), ChannelOffset, ChannelCount * 4, out availability, out string? error);
-        if (bar0 is null) { reason = error!; return null; }
+        if (bar0 is null) { reason = $"{error}; or install the retweak-hotspot module"; return null; }
         reason = "";
         return new NvidiaHotspot(bar0);
     }
@@ -118,6 +133,20 @@ public sealed class NvidiaHotspot : IDisposable
     /// <summary>All six raw thermal channels, or null if the read failed.</summary>
     public long[]? ReadChannels()
     {
+        if (_moduleFile is not null)
+        {
+            // Six hex registers, e.g. "40002980 40002c40 ...". The module refuses the read while the GPU is powered down.
+            try
+            {
+                var parts = File.ReadAllText(_moduleFile).Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                var c = new long[ChannelCount];
+                if (parts.Length != ChannelCount) return null;
+                for (int i = 0; i < ChannelCount; i++)
+                    if (!long.TryParse(parts[i], System.Globalization.NumberStyles.HexNumber, null, out c[i])) return null;
+                return c;
+            }
+            catch (IOException) { return null; }
+        }
         if (_bar0 is not null)
         {
             var c = new long[ChannelCount];

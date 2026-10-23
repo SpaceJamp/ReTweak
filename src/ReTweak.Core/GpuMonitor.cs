@@ -80,10 +80,11 @@ public sealed class GpuMonitor : IDisposable
             {
                 var reader = OperatingSystem.IsWindows()
                     ? NvidiaHotspot.TryCreate(pci.Bus, pci.Device, PciFunction(pci), out hotspotState, out string why)
-                    : NvidiaHotspot.TryCreateLinux($"/sys/bus/pci/devices/{pci.Domain:x4}:{pci.Bus:x2}:{pci.Device:x2}.{PciFunction(pci)}", out hotspotState, out why);
+                    : NvidiaHotspot.TryCreateLinux($"/sys/bus/pci/devices/{LinuxPciAddress(pci)}",
+                                                   $"/sys/kernel/retweak_hotspot/{LinuxPciAddress(pci)}/channels", out hotspotState, out why);
                 hotspot = reader is null ? null : new HotspotSampler(reader);
-                hotspotNote = hotspot is not null ? (OperatingSystem.IsWindows() ? "from GPU register via PawnIO" : "from GPU register (BAR0, read-only)")
-                                                  : $"Unavailable: {why}";
+                hotspotNote = hotspot is null ? $"Unavailable: {why}"
+                            : OperatingSystem.IsWindows() ? "from GPU register via PawnIO" : $"from GPU register ({reader!.Source})";
             }
 
             PowerLimits? limits = Nvml.DeviceGetPowerManagementLimitConstraints(handle, out uint minMw, out uint maxMw) == Nvml.Success
@@ -92,6 +93,9 @@ public sealed class GpuMonitor : IDisposable
             _devices.Add(new Device(info, handle, fans, detector, thermal, hotspot, hotspotState, hotspotNote, limits));
         }
     }
+
+    /// <summary>The kernel's name for the GPU, e.g. "0000:01:00.0".</summary>
+    private static string LinuxPciAddress(Nvml.PciInfo pci) => $"{pci.Domain:x4}:{pci.Bus:x2}:{pci.Device:x2}.{PciFunction(pci)}";
 
     /// <summary>"0000:01:00.0" -> 0. NVML's PCI struct has no separate function field.</summary>
     private static unsafe uint PciFunction(Nvml.PciInfo pci)

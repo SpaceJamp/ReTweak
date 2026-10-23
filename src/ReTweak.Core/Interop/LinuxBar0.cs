@@ -45,12 +45,21 @@ internal sealed unsafe partial class LinuxBar0 : IDisposable
         if (map == -1)
         {
             (failure, error) = mapErrno is EPerm or EAcces
-                ? (HotspotAvailability.Failed, "the kernel blocks reading the GPU's registers (boot with iomem=relaxed to allow it)")
+                ? (HotspotAvailability.Failed, LockedDown()
+                    ? "Secure Boot lockdown blocks reading the GPU's registers from user space"
+                    : "the kernel blocks reading the GPU's registers (boot with iomem=relaxed to allow it)")
                 : (HotspotAvailability.Failed, $"couldn't map the GPU's registers (errno {mapErrno})");
             return null;
         }
         (failure, error) = (HotspotAvailability.Available, null);
         return new LinuxBar0(map, mapLength, pageBase);
+    }
+
+    /// <summary>Kernel lockdown on ("[integrity]" or "[confidentiality]"; Fedora turns it on with Secure Boot) blocks the mapping outright.</summary>
+    private static bool LockedDown()
+    {
+        try { return !File.ReadAllText("/sys/kernel/security/lockdown").Contains("[none]"); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return false; }
     }
 
     /// <summary>One 32-bit register; must lie inside the mapped range.</summary>
