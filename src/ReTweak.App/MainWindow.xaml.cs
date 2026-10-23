@@ -1,6 +1,7 @@
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Hosting;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Shapes;
 using ReTweak.App.Native;
@@ -392,6 +393,7 @@ public sealed partial class MainWindow : Window
         _fanNowDot = Dot(0, 0, 10, Theme.Muted);
         canvas.Children.Add(_fanNowDot);
         PlaceNowDot(_fanNowDot, o);
+        Glide(_fanNowDot); // after the first placement, so a rebuilt chart doesn't fly the dot in from the corner
     }
 
     /// <summary>Moves the live dot to the current temperature and fan speed.</summary>
@@ -403,6 +405,24 @@ public sealed partial class MainWindow : Window
         dot.Fill = o.Mode != FanMode.Driver || ViewModel.FanAppliedPercent is not null ? Theme.Ok : Theme.Muted;
         Canvas.SetLeft(dot, FanX(now) - dot.Width / 2);
         Canvas.SetTop(dot, FanY(pct) - dot.Height / 2);
+    }
+
+    /// <summary>
+    /// Every later move of <paramref name="e"/> glides instead of jumping, on Hyprland's default curve
+    /// (bezier 0.05, 0.9, 0.1, 1.05: quick start, a touch of overshoot). Shorter than the 1 s update.
+    /// </summary>
+    private static void Glide(UIElement e)
+    {
+        var visual = ElementCompositionPreview.GetElementVisual(e);
+        var c = visual.Compositor;
+        var move = c.CreateVector3KeyFrameAnimation();
+        move.Target = "Offset";
+        move.InsertExpressionKeyFrame(1f, "this.FinalValue",
+            c.CreateCubicBezierEasingFunction(new System.Numerics.Vector2(0.05f, 0.9f), new System.Numerics.Vector2(0.1f, 1.05f)));
+        move.Duration = TimeSpan.FromMilliseconds(600);
+        var implicitAnimations = c.CreateImplicitAnimationCollection();
+        implicitAnimations["Offset"] = move;
+        visual.ImplicitAnimations = implicitAnimations;
     }
 
     private static Ellipse Dot(double x, double y, double size, Brush fill)
