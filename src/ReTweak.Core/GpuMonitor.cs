@@ -65,24 +65,25 @@ public sealed class GpuMonitor : IDisposable
             AsusPowerDetector? detector = null;
             NvidiaThermal? thermal = null;
             HotspotSampler? hotspot = null;
-            // The RTX 50 hotspot comes from PawnIO, which is Windows-only.
-            string hotspotNote = OperatingSystem.IsWindows() ? "Not reported by this card" : "Not read on Linux yet (needs PawnIO, Windows only)";
+            string hotspotNote = "Not reported by this card";
             var hotspotState = HotspotAvailability.NotApplicable;
+            uint? arch = Nvml.DeviceGetArchitecture(handle, out uint a) == Nvml.Success ? a : null;
             if (nvapi is not null && nvapiByBus.TryGetValue(pci.Bus, out var nvHandle))
             {
                 if (info.IsAsus) detector = AsusPowerDetector.TryCreate(nvapi, nvHandle);
                 uint? nvmlCore = Nvml.DeviceGetTemperature(handle, 0, out uint c) == Nvml.Success ? c : null;
-                if (Nvml.DeviceGetArchitecture(handle, out uint arch) == Nvml.Success)
-                {
-                    thermal = NvidiaThermal.TryCreate(nvapi, nvHandle, arch, nvmlCore);
-                    // RTX 50 dropped the hotspot from the driver APIs; read the GPU register through PawnIO instead.
-                    if (arch == Nvml.ArchBlackwell)
-                    {
-                        var reader = NvidiaHotspot.TryCreate(pci.Bus, pci.Device, PciFunction(pci), out hotspotState, out string why);
-                        hotspot = reader is null ? null : new HotspotSampler(reader);
-                        hotspotNote = hotspot is null ? $"Unavailable: {why}" : "from GPU register via PawnIO";
-                    }
-                }
+                if (arch is uint ar) thermal = NvidiaThermal.TryCreate(nvapi, nvHandle, ar, nvmlCore);
+            }
+            // RTX 50 dropped the hotspot from the driver APIs; read the GPU register instead: through PawnIO on
+            // Windows, a read-only mapping of BAR0 from sysfs on Linux.
+            if (arch == Nvml.ArchBlackwell && (OperatingSystem.IsWindows() || OperatingSystem.IsLinux()))
+            {
+                var reader = OperatingSystem.IsWindows()
+                    ? NvidiaHotspot.TryCreate(pci.Bus, pci.Device, PciFunction(pci), out hotspotState, out string why)
+                    : NvidiaHotspot.TryCreateLinux($"/sys/bus/pci/devices/{pci.Domain:x4}:{pci.Bus:x2}:{pci.Device:x2}.{PciFunction(pci)}", out hotspotState, out why);
+                hotspot = reader is null ? null : new HotspotSampler(reader);
+                hotspotNote = hotspot is not null ? (OperatingSystem.IsWindows() ? "from GPU register via PawnIO" : "from GPU register (BAR0, read-only)")
+                                                  : $"Unavailable: {why}";
             }
 
             PowerLimits? limits = Nvml.DeviceGetPowerManagementLimitConstraints(handle, out uint minMw, out uint maxMw) == Nvml.Success

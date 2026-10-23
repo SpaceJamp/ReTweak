@@ -20,7 +20,8 @@ public enum HotspotAvailability
 /// <summary>
 /// GPU hotspot on Blackwell (RTX 50), which NVIDIA's driver APIs no longer report.
 ///
-/// Read from six GPU registers at BAR0 + 0xAD0A90 via PawnIO's signed NVIDIA module (found by
+/// Read from six GPU registers at BAR0 + 0xAD0A90 via PawnIO's signed NVIDIA module on Windows, or a
+/// read-only mapping of BAR0 from sysfs on Linux (<see cref="LinuxBar0"/>) (found by
 /// disassembling HWMonitor 1.68; see docs/power-detector.md, "Hotspot"). Bit 30 marks a valid
 /// sample; the low 16 bits are 1/256 °C. Channels #1-#4 are individual sensors and #5
 /// (0xAD0AA0) is exactly their maximum in every one of 2,889 reads: that's the hotspot.
@@ -40,13 +41,46 @@ public sealed class NvidiaHotspot : IDisposable
     private const int SensorChannels = 4;
     private const long ValidBit = 1L << 30;
 
-    private readonly PawnIo _pawnIo;
-    private readonly long[] _pciAddress;
+    /// <summary>Where the six channels sit in BAR0; the PawnIO module reads the same registers.</summary>
+    private const long ChannelOffset = 0xAD0A90;
+    private const string NvidiaVendor = "0x10de";
+
+    // Exactly one backend: PawnIO on Windows, a read-only BAR0 mapping on Linux.
+    private readonly PawnIo? _pawnIo;
+    private readonly LinuxBar0? _bar0;
+    private readonly long[] _pciAddress = [];
 
     private NvidiaHotspot(PawnIo pawnIo, uint bus, uint device, uint function)
     {
         _pawnIo = pawnIo;
         _pciAddress = [bus, device, function];
+    }
+
+    private NvidiaHotspot(LinuxBar0 bar0) => _bar0 = bar0;
+
+    /// <summary>
+    /// Linux: maps the registers from the GPU's sysfs folder (/sys/bus/pci/devices/0000:01:00.0), read-only.
+    /// Null when unavailable; <paramref name="reason"/> then says why, in words for the user.
+    /// </summary>
+    public static NvidiaHotspot? TryCreateLinux(string pciDeviceFolder, out HotspotAvailability availability, out string reason)
+    {
+        string vendor;
+        try { vendor = File.ReadAllText(Path.Combine(pciDeviceFolder, "vendor")).Trim(); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            (availability, reason) = (HotspotAvailability.Unsupported, $"can't find the GPU in sysfs ({pciDeviceFolder})");
+            return null;
+        }
+        // Never map a device that isn't NVIDIA's: the offsets mean nothing elsewhere.
+        if (vendor != NvidiaVendor)
+        {
+            (availability, reason) = (HotspotAvailability.Unsupported, $"{pciDeviceFolder} isn't an NVIDIA device");
+            return null;
+        }
+        var bar0 = LinuxBar0.TryOpen(Path.Combine(pciDeviceFolder, "resource0"), ChannelOffset, ChannelCount * 4, out availability, out string? error);
+        if (bar0 is null) { reason = error!; return null; }
+        reason = "";
+        return new NvidiaHotspot(bar0);
     }
 
     /// <summary>Null when unavailable; <paramref name="reason"/> then says why, in words for the user.</summary>
@@ -82,8 +116,16 @@ public sealed class NvidiaHotspot : IDisposable
     public double?[]? Read() => ReadChannels() is { } c ? Array.ConvertAll(c, Decode) : null;
 
     /// <summary>All six raw thermal channels, or null if the read failed.</summary>
-    public long[]? ReadChannels() =>
-        _pawnIo.Execute(ReadFunction, _pciAddress, ChannelCount) is { Length: ChannelCount } c ? c : null;
+    public long[]? ReadChannels()
+    {
+        if (_bar0 is not null)
+        {
+            var c = new long[ChannelCount];
+            for (int i = 0; i < ChannelCount; i++) c[i] = _bar0.Read32(ChannelOffset + 4 * i);
+            return c;
+        }
+        return _pawnIo!.Execute(ReadFunction, _pciAddress, ChannelCount) is { Length: ChannelCount } r ? r : null;
+    }
 
     /// <summary>
     /// Memory-chip temperatures (°C) from PawnIO's NVIDIA module (BAR0 + 0x900000 block; Ampere, Ada and
@@ -91,6 +133,8 @@ public sealed class NvidiaHotspot : IDisposable
     /// </summary>
     public int[]? ReadMemoryChips()
     {
+        // shortcut: memory chips come from PawnIO's module only; port its 0x900000 block read if Linux needs them.
+        if (_pawnIo is null) return null;
         if (_pawnIo.Execute(MemoryFunction, _pciAddress, MemorySensorCount + 2) is not { Length: MemorySensorCount + 2 } r
             || r[1] != MemorySensorCount) return null;
         var temps = r.Skip(2).Select(v => unchecked((int)v)).Where(t => t != int.MinValue && t is > 0 and < 150).ToArray();
@@ -135,5 +179,9 @@ public sealed class NvidiaHotspot : IDisposable
         return c is > 0 and < 150 ? c : null;
     }
 
-    public void Dispose() => _pawnIo.Dispose();
+    public void Dispose()
+    {
+        _pawnIo?.Dispose();
+        _bar0?.Dispose();
+    }
 }

@@ -59,6 +59,7 @@ static class Simulate
         PowerEmergencyCheck();
         AdaptiveCheck();
         TrustedPathsCheck();
+        LinuxHotspotCheck();
 
         Console.WriteLine(_failures == 0 ? "\nAll scenarios passed." : $"\n{_failures} scenario(s) FAILED.");
         return _failures;
@@ -1011,6 +1012,44 @@ static class Simulate
         Check($"Auto without activity readings keeps the general {auto.SmartTargetHotspotC:F0} °C target",
               plain.HotspotC.Skip(240).Max(h => Math.Abs(h - auto.SmartTargetHotspotC)) <= 3 &&
               plain.Statuses[^1].Activity == ActivityKind.Unknown, plain.Statuses[^1].Text);
+    }
+
+    /// <summary>The Linux hotspot reader against a fake sysfs GPU folder: a resource0 file with known registers.</summary>
+    private static void LinuxHotspotCheck()
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            Console.WriteLine("  SKIP: Linux hotspot reader (Linux only)");
+            return;
+        }
+        string dir = Path.Combine(Path.GetTempPath(), $"retweak-bar0-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "vendor"), "0x10de\n");
+            double[] temps = [41.5, 44.25, 39.0, 47.75, 47.75, 45.0];
+            using (var f = new FileStream(Path.Combine(dir, "resource0"), FileMode.CreateNew))
+            {
+                f.SetLength(0xAD1000); // sparse; the registers sit at 0xAD0A90 like on the card
+                f.Position = 0xAD0A90;
+                using var w = new BinaryWriter(f);
+                foreach (double t in temps) w.Write((1u << 30) | (uint)(t * 256));
+            }
+            using (var reader = NvidiaHotspot.TryCreateLinux(dir, out var state, out string why))
+            {
+                var got = reader?.Read();
+                bool same = got is { Length: 6 } && got.Zip(temps).All(p => p.First == p.Second);
+                Check("Linux hotspot: reads the six registers from resource0", same && state == HotspotAvailability.Available,
+                      got is null ? why : string.Join(", ", got));
+                Check("Linux hotspot: no memory chips without PawnIO", reader?.ReadMemoryChips() is null, "");
+            }
+
+            File.WriteAllText(Path.Combine(dir, "vendor"), "0x1002\n");
+            bool refused = NvidiaHotspot.TryCreateLinux(dir, out var other, out _) is null && other == HotspotAvailability.Unsupported;
+            bool missing = NvidiaHotspot.TryCreateLinux(Path.Combine(dir, "nope"), out var gone, out _) is null && gone == HotspotAvailability.Unsupported;
+            Check("Linux hotspot: refuses a non-NVIDIA device and a missing one", refused && missing, $"{other}, {gone}");
+        }
+        finally { Directory.Delete(dir, recursive: true); }
     }
 
     /// <summary>The hardening helpers against a real junction (mklink /J works without administrator rights).</summary>
