@@ -19,7 +19,8 @@ namespace ReTweak.Core;
 /// </summary>
 public static partial class TrustedPaths
 {
-    public static bool IsElevated { get; } = new WindowsPrincipal(WindowsIdentity.GetCurrent()).IsInRole(WindowsBuiltInRole.Administrator);
+    // Administrator on Windows, root on Linux.
+    public static bool IsElevated { get; } = Environment.IsPrivilegedProcess;
 
     /// <summary>%SystemRoot%\System32\<paramref name="name"/> (or %SystemRoot%\ for explorer.exe), never a PATH lookup.</summary>
     public static string SystemExe(string name)
@@ -54,8 +55,10 @@ public static partial class TrustedPaths
     /// <summary>True if <paramref name="path"/> is inside <paramref name="root"/> (after normalising both).</summary>
     public static bool IsUnder(string path, string root)
     {
-        string p = Path.GetFullPath(path).TrimEnd('\\') + "\\", r = Path.GetFullPath(root).TrimEnd('\\') + "\\";
-        return p.StartsWith(r, StringComparison.OrdinalIgnoreCase);
+        // The platform's separator and case rules: Linux paths use '/' and are case-sensitive.
+        char sep = Path.DirectorySeparatorChar;
+        string p = Path.GetFullPath(path).TrimEnd(sep) + sep, r = Path.GetFullPath(root).TrimEnd(sep) + sep;
+        return p.StartsWith(r, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -134,7 +137,9 @@ public static partial class TrustedPaths
     public static IDisposable HoldPlainFolder(string folder)
     {
         var held = new FolderHold();
-        if (!IsElevated) return held;
+        // shortcut: the hold uses Windows file handles; on Linux, root writes without it. Add an openat()-based hold if
+        // ReTweak ever runs as root against a user-writable home.
+        if (!IsElevated || !OperatingSystem.IsWindows()) return held;
         try
         {
             string full = Path.GetFullPath(folder).TrimEnd('\\');

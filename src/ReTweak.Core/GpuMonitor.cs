@@ -65,7 +65,8 @@ public sealed class GpuMonitor : IDisposable
             AsusPowerDetector? detector = null;
             NvidiaThermal? thermal = null;
             HotspotSampler? hotspot = null;
-            string hotspotNote = "Not reported by this card";
+            // The RTX 50 hotspot comes from PawnIO, which is Windows-only.
+            string hotspotNote = OperatingSystem.IsWindows() ? "Not reported by this card" : "Not read on Linux yet (needs PawnIO, Windows only)";
             var hotspotState = HotspotAvailability.NotApplicable;
             if (nvapi is not null && nvapiByBus.TryGetValue(pci.Bus, out var nvHandle))
             {

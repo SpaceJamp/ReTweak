@@ -10,6 +10,8 @@ using ReTweak.Core;
 // ReTweak.Cli --fans          fan count, allowed range, current and target speeds
 // ReTweak.Cli --fan <pct>|curve|smart [--duration secs]   drive the fans until Ctrl+C, then hand them back (admin)
 // ReTweak.Cli --fan auto      hand the fans back to the driver (e.g. after a crash) (admin)
+// ReTweak.Cli --run [--duration secs]   what the app does, headless: your saved settings (Auto, power limit,
+//                                         emergency cut) until Ctrl+C. Windows (admin) or Linux (root)
 // add --debug to any of these for a full diagnostic log
 // ReTweak.Cli --version          version and build number
 // ReTweak.Cli --security-check   audit ReTweak's files, autostart, PawnIO, data folders and Windows protections
@@ -90,6 +92,12 @@ if (args.Contains("--fans"))
     return;
 }
 
+if (args.Contains("--run"))
+{
+    Environment.ExitCode = RunFan(monitor, "", args, saved: true);
+    return;
+}
+
 int fanIdx = Array.IndexOf(args, "--fan");
 if (fanIdx >= 0)
 {
@@ -139,7 +147,7 @@ do
     if (watch) { Thread.Sleep(1000); Console.WriteLine(); }
 } while (watch);
 
-static int RunFan(GpuMonitor monitor, string mode, string[] args)
+static int RunFan(GpuMonitor monitor, string mode, string[] args, bool saved = false)
 {
     var gpu = monitor.Gpus.FirstOrDefault(g => monitor.FanCount(g.Index) > 0);
     if (gpu is null) { Console.WriteLine("No GPU with controllable fans found."); return 1; }
@@ -151,34 +159,43 @@ static int RunFan(GpuMonitor monitor, string mode, string[] args)
         return err is null ? 0 : 1;
     }
 
-    FanOptions options;
-    if (mode.Equals("curve", StringComparison.OrdinalIgnoreCase)) options = new() { Mode = FanMode.Curve };
-    else if (mode.Equals("smart", StringComparison.OrdinalIgnoreCase)) options = new() { Mode = FanMode.Smart };
-    else if (int.TryParse(mode, out int pct) && pct is >= 0 and <= 100) options = new() { Mode = FanMode.Fixed, FixedPercent = pct };
+    // --run: the saved settings, power limit included. --fan <mode>: a quick test with defaults (power left alone).
+    AppSettings settings;
+    if (saved)
+    {
+        settings = AppSettings.Load();
+        foreach (var problem in AppSettings.LoadProblems) Console.WriteLine($"settings: {problem}");
+    }
+    else if (mode.Equals("curve", StringComparison.OrdinalIgnoreCase)) settings = new() { Fans = new() { Mode = FanMode.Curve } };
+    else if (mode.Equals("smart", StringComparison.OrdinalIgnoreCase)) settings = new() { Fans = new() { Mode = FanMode.Smart } };
+    else if (int.TryParse(mode, out int pct) && pct is >= 0 and <= 100) settings = new() { Fans = new() { Mode = FanMode.Fixed, FixedPercent = pct } };
     else { Console.WriteLine("Usage: --fan <0-100> | curve | smart | auto  [--duration secs]"); return 1; }
+    var options = settings.Fans;
 
     int durIdx = Array.IndexOf(args, "--duration");
     var duration = durIdx >= 0 && durIdx + 1 < args.Length && int.TryParse(args[durIdx + 1], out int secs)
         ? TimeSpan.FromSeconds(secs) : Timeout.InfiniteTimeSpan;
 
-    using var fans = new FanController(monitor, gpu.Index) { Options = options };
+    using var control = new GpuControl(monitor, gpu.Index); // the same loop as the app: fans, power limit, emergency cut
+    control.Notice += (title, text) => Console.WriteLine($"*** {title}: {text}");
+    control.Apply(settings);
     var done = new ManualResetEventSlim();
     Console.CancelKeyPress += (_, e) => { e.Cancel = true; done.Set(); };
-    AppDomain.CurrentDomain.ProcessExit += (_, _) => fans.Dispose(); // console closed: still hand the fans back
+    AppDomain.CurrentDomain.ProcessExit += (_, _) => control.Dispose(); // console closed: still hand the fans back
 
-    Console.WriteLine($"Controlling {gpu.Name} fans ({options.Mode}, failsafe {options.FailsafeTempC:F0} °C). Ctrl+C to stop.");
+    Console.WriteLine($"Controlling {gpu.Name} fans ({options.Mode}, failsafe {options.FailsafeTempC:F0} °C" +
+                      (saved ? $", power limit {settings.PowerLimitPercent} %" : "") + $"){(GpuControl.CanWrite ? "" : " - read-only: run as admin/root to write")}. Ctrl+C to stop.");
     var started = System.Diagnostics.Stopwatch.StartNew();
     int result = 0;
     do
     {
         var s = monitor.Sample(gpu.Index, includeConnector: false);
-        var fg = ReTweak.Core.Interop.Foreground.Read();
-        var st = fans.Tick(FanTemps.From(s, fg));
+        var st = control.Tick(s)!; // a GPU with fans: picked above
         Console.WriteLine($"{DateTime.Now:HH:mm:ss}  core {s.CoreTempC:F1} °C  fans {string.Join("/", s.FanPercents.Select(f => $"{f}%"))}  {st.Text}");
         if (st.NeedsAdmin) { result = 1; break; } // nothing to do until rerun as administrator
     } while (!done.Wait(1000) && (duration == Timeout.InfiniteTimeSpan || started.Elapsed < duration));
 
-    fans.Dispose();
+    control.Dispose();
     Console.WriteLine("Fans handed back to the driver.");
     return result;
 }

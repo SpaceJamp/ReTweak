@@ -1016,6 +1016,15 @@ static class Simulate
     /// <summary>The hardening helpers against a real junction (mklink /J works without administrator rights).</summary>
     private static void TrustedPathsCheck()
     {
+        if (!OperatingSystem.IsWindows())
+        {
+            bool underLinux = TrustedPaths.IsUnder("/home/u/.local/share/ReTweak/x", "/home/u/.local/share/ReTweak")
+                              && !TrustedPaths.IsUnder("/home/u/.local/share/ReTweak-other", "/home/u/.local/share/ReTweak")
+                              && !TrustedPaths.IsUnder("/home/u/.local/share/retweak/x", "/home/u/.local/share/ReTweak"); // case counts
+            Check("Trusted paths: 'inside folder' check uses Linux separators and case", underLinux, $"{underLinux}");
+            Console.WriteLine("  SKIP: junction and system32 checks are Windows-only");
+            return;
+        }
         string root = Path.Combine(Path.GetTempPath(), $"retweak-paths-{Guid.NewGuid():N}");
         string real = Path.Combine(root, "real"), target = Path.Combine(root, "elsewhere"), link = Path.Combine(root, "link");
         Directory.CreateDirectory(real);
