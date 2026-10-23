@@ -430,6 +430,10 @@ public sealed class FanController : IDisposable
         var now = _clock();
         double dt = _lastTick is TimeSpan last ? Math.Clamp((now - last).TotalSeconds, 0, 5) : 1;
         _lastTick = now;
+        // Before any early return: PowerEmergency ends a cut only when this goes false, and a stale "true" left
+        // there by an early return kept a cut on for good after a switch to Driver mode (audit, 2026-10-22).
+        string? failsafe = Failsafe(o, temps);
+        FailsafeActive = failsafe is not null;
 
         if (o.Mode == FanMode.Driver && !o.AutoAssist)
         {
@@ -446,8 +450,6 @@ public sealed class FanController : IDisposable
                 ? new(FanMode.Driver, null, $"Automatic (driver). Safety net off: {_blocked}.", AlertSeverity.None, _blockedByPermission)
                 : new(o.Mode, null, $"Can't set fan speed: {_blocked}. Fans are on automatic.", AlertSeverity.Warning, _blockedByPermission);
 
-        string? failsafe = Failsafe(o, temps);
-        FailsafeActive = failsafe is not null;
         var (source, sourceName) = o.Mode == FanMode.Smart ? SmartSource(o, temps) : SourceTemp(o, temps);
         if (o.Mode == FanMode.Smart && sourceName != _smartInput)
         {

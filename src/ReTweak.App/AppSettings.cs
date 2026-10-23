@@ -1,5 +1,4 @@
 using System.Text.Json;
-using Microsoft.Win32;
 using ReTweak.Core;
 
 namespace ReTweak.App;
@@ -109,27 +108,21 @@ public enum AutostartState
     On,
     /// <summary>Logon task points at a different exe (the app was moved or rebuilt elsewhere).</summary>
     Stale,
-    /// <summary>Only the old Run-key entry exists: starts with Windows, but without administrator rights.</summary>
-    Legacy,
 }
 
 /// <summary>
 /// Start with Windows through a per-user logon task with highest privileges, so ReTweak starts
 /// elevated (GPU hotspot, fan control) without a UAC prompt at every logon. Creating the task
-/// needs administrator rights once. Earlier versions used the HKCU Run key, which can't start
-/// an elevated app; an entry left there is migrated to the task.
+/// needs administrator rights once.
 /// </summary>
 public static class Autostart
 {
-    private const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
-    private const string ValueName = "ReTweak";
     private const string Arguments = "--minimized";
     private static readonly LogonTask LogonTask = new("ReTweak");
 
     private static string Exe => Environment.ProcessPath!;
     /// <summary>This exe is under Program Files, where only administrators can change it.</summary>
     public static bool IsInstalledCopy => TrustedPaths.IsUnder(Exe, Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles));
-    private static string RunKeyCommand => $"\"{Exe}\" {Arguments}";
 
     public static bool IsAdmin => ReTweak.Core.LogonTask.IsElevated;
 
@@ -141,21 +134,12 @@ public static class Autostart
             if (LogonTask.Query() is { } t)
                 return string.Equals(t.Command, Exe, StringComparison.OrdinalIgnoreCase) && t.Arguments == Arguments
                     ? AutostartState.On : AutostartState.Stale;
-            return RunKeyValue is { Length: > 0 } ? AutostartState.Legacy : AutostartState.Off;
-        }
-    }
-
-    private static string? RunKeyValue
-    {
-        get
-        {
-            using var key = Registry.CurrentUser.OpenSubKey(RunKey);
-            return key?.GetValue(ValueName) as string;
+            return AutostartState.Off;
         }
     }
 
     /// <summary>
-    /// Registers (pointing at this exe) or removes the logon task, and drops any old Run-key entry.
+    /// Registers (pointing at this exe) or removes the logon task.
     /// When unelevated, <paramref name="elevate"/> lets schtasks.exe ask for administrator rights (UAC).
     /// Blocks until done, including while the UAC prompt is up. Returns null on success, else the reason.
     /// </summary>
@@ -163,37 +147,26 @@ public static class Autostart
     {
         string? error;
         bool ok = enabled ? LogonTask.Register(Exe, Arguments, elevate, out error) : LogonTask.Remove(elevate, out error);
-        if (ok || !enabled) RemoveRunKey(); // keep the old entry until the task replaces it
         return ok ? null : error;
     }
 
     /// <summary>
-    /// Started elevated with only an old Run-key entry for this exe: switch it to the logon task
-    /// without asking, since the user already chose to start with Windows. A Run-key entry for
-    /// another exe, or a stale task, is left for the Settings dialog to fix when the user saves.
+    /// Elevated, from Program Files, with the logon task still starting a copy elsewhere (the build folder):
+    /// move the task here. Any other stale task is left for the Settings dialog to fix when the user saves.
     /// </summary>
     public static void MigrateIfElevated()
     {
         if (!IsAdmin) return;
         try
         {
-            if (string.Equals(RunKeyValue, RunKeyCommand, StringComparison.OrdinalIgnoreCase) && LogonTask.Query() is null)
-                Set(true, elevate: false);
-            // Installed to Program Files while the task still starts a copy elsewhere (the build folder): move it here.
             // Only toward a protected copy, never away from one, so running a dev build doesn't undo an install.
-            else if (LogonTask.Query() is { } task && !string.Equals(task.Command, Exe, StringComparison.OrdinalIgnoreCase) && IsInstalledCopy)
+            if (LogonTask.Query() is { } task && !string.Equals(task.Command, Exe, StringComparison.OrdinalIgnoreCase) && IsInstalledCopy)
             {
                 string? why = Set(true, elevate: false);
                 Diag.Info(DiagCategory.App, why is null ? "Start with Windows moved to the installed copy" : "couldn't move Start with Windows to the installed copy",
                           new { from = task.Command, to = Exe, why });
             }
         }
-        catch (Exception) { /* best effort: the Run-key entry keeps working until the next try */ }
-    }
-
-    private static void RemoveRunKey()
-    {
-        using var key = Registry.CurrentUser.OpenSubKey(RunKey, writable: true);
-        key?.DeleteValue(ValueName, throwOnMissingValue: false);
+        catch (Exception) { /* best effort: the old task keeps working until the next try */ }
     }
 }

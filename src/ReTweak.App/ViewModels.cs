@@ -245,6 +245,7 @@ public sealed partial class MainViewModel : Observable, IDisposable
     private int? _powerLimitApplied;
     private readonly PowerEmergency _emergency = new();
     private double _emergencyWatts;
+    private bool _emergencyFailed;
 
     /// <summary>The card's power range for the Settings dialog, or null if it doesn't report one.</summary>
     public string? PowerLimitInfo => _monitor.PowerLimits(_gpu) is { } l
@@ -272,6 +273,7 @@ public sealed partial class MainViewModel : Observable, IDisposable
         {
             string? error = _monitor.SetPowerLimitPercent(_gpu, 0, out double watts); // 0 % clamps to the driver's minimum
             _emergencyWatts = watts;
+            _emergencyFailed = error is not null;
             RefreshStatus();
             _powerLimitApplied = 0; // so the restore below always puts the user's limit back, even 100 %
             Diag.Warn(DiagCategory.Fan, "emergency power cut", new { watts = Math.Round(watts), error, status = st.Text });
@@ -418,8 +420,10 @@ public sealed partial class MainViewModel : Observable, IDisposable
         FanStatusBrush = st.Severity > AlertSeverity.None ? Theme.For(st.Severity) : st.Mode == FanMode.Driver ? Theme.Muted : Theme.Ok;
         if (_emergency.Active)
         {
-            FanStatus = $"Emergency power cut to {_emergencyWatts:F0} W: fans are at full speed and still at a failsafe. " +
-                        $"Your limit comes back after {PowerEmergency.ReleaseAfter.TotalSeconds:F0} s without one. {FanStatus}";
+            FanStatus = (_emergencyFailed
+                            ? "Emergency: fans are at full speed and still at a failsafe, and the power limit couldn't be lowered. "
+                            : $"Emergency power cut to {_emergencyWatts:F0} W: fans are at full speed and still at a failsafe. " +
+                              $"Your limit comes back after {PowerEmergency.ReleaseAfter.TotalSeconds:F0} s without one. ") + FanStatus;
             FanStatusBrush = Theme.Critical;
         }
         FanChanged?.Invoke();
@@ -496,7 +500,7 @@ public sealed partial class MainViewModel : Observable, IDisposable
         _worst = worst?.Severity ?? AlertSeverity.None;
         if (_emergency.Active) // outranks any alert: ReTweak itself is holding the card back right now
         {
-            Status = $"Emergency power cut · {_emergencyWatts:F0} W";
+            Status = _emergencyFailed ? "Emergency: couldn't lower power" : $"Emergency power cut · {_emergencyWatts:F0} W";
             StatusBrush = Theme.Critical;
             _worst = AlertSeverity.Critical;
         }
@@ -506,6 +510,9 @@ public sealed partial class MainViewModel : Observable, IDisposable
     public void Dispose()
     {
         _timer.Stop();
+        // Exiting during a cut: give the user's limit back, or it stays at the minimum until a reboot (a 100 %
+        // setting is left alone at the next start).
+        if (_emergency.Active && Elevation.IsAdmin) _monitor.SetPowerLimitPercent(_gpu, _settings.PowerLimitPercent, out _);
         if (_fan is not null) AirflowStore.Save(GpuName, _fan.Airflow.Corrections);
         _fan?.Dispose(); // back to the driver's curve before NVML shuts down
         _sampler?.Dispose();

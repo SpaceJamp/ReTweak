@@ -83,7 +83,7 @@ public static partial class SecurityCheck
         Add(() =>
         {
             var task = new LogonTask("ReTweak").Query();
-            if (task is null) return new("Autostart", "No elevated logon task", CheckStatus.Info, "Start with Windows is off (or uses the old unelevated Run key).");
+            if (task is null) return new("Autostart", "No elevated logon task", CheckStatus.Info, "Start with Windows is off.");
             bool ours = exePath is not null && string.Equals(task.Value.Command, exePath, StringComparison.OrdinalIgnoreCase);
             return ours
                 ? new("Autostart", "Logon task runs this ReTweak", CheckStatus.Pass, $"{task.Value.Command} {task.Value.Arguments}, at highest privileges.")

@@ -43,8 +43,8 @@ you can turn it off in Settings). All of these need ReTweak to run as administra
 - Switching to Driver, exiting, losing the temperature reading for 3 s or a failed write hands
   the fans back to the driver's own curve. At the failsafe temperature (88 °C by default)
   the fans go to 100%.
-- If ReTweak is killed outright (Task Manager, crash), the last manual speed stays until the next
-  reboot or until you run `ReTweak.Cli --fan auto`.
+- If ReTweak is killed outright (Task Manager, crash) or hangs for 15 s, its fan watchdog hands the fans
+  back to the driver's curve (`ReTweak.Cli --fan auto` does the same by hand).
 - Close GPU Tweak III and other fan tools first. ReTweak warns when another program keeps
   changing the fan speed.
 
@@ -194,10 +194,8 @@ elevated (needed for the hotspot) without a UAC prompt each time. It runs on bat
 Creating or removing the task needs administrator rights once: if ReTweak isn't running as
 administrator, Windows asks when you save. Check it with `schtasks /Query /TN ReTweak`.
 
-Older versions used the `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` key, which can't
-start an elevated app. ReTweak moves such an entry to the task the next time it runs as administrator,
-or when you save Settings. An installed copy (Program Files) moves a task that points at another folder to
-itself; to point it somewhere else, open Settings and save.
+An installed copy (Program Files) moves a task that points at another folder to itself; to point it
+somewhere else, open Settings and save.
 
 ## License
 

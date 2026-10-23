@@ -655,6 +655,18 @@ static class Simulate
         var early = e.Update(false, true, T(61));
         var restore = PowerEmergency.Action.None;
         for (int s = 62; s <= 125; s++) restore = e.Update(false, false, T(s)) is var a && a != PowerEmergency.Action.None ? a : restore;
+        // A cut must still end after a switch to Driver mode with the safety net off, where the tick returns early.
+        var fans = new FakeFans();
+        bool released = false;
+        using (var fc = fans.Make(new FanOptions { Mode = FanMode.Fixed, FixedPercent = 100 }, range: (30, 100)))
+        {
+            var pe = new PowerEmergency();
+            for (int s = 0; s <= 12; s++) { fans.Now += T(1); var st = fc.Tick(new FanTemps(95)); pe.Update(fc.FailsafeActive, st.Percent >= fc.Range.Max, T(s)); }
+            bool cutOn = pe.Active;
+            fc.Options = new FanOptions { Mode = FanMode.Driver, AutoAssist = false };
+            for (int s = 13; s <= 80; s++) { fans.Now += T(1); var st = fc.Tick(new FanTemps(50)); released |= pe.Update(fc.FailsafeActive, st.Percent >= fc.Range.Max, T(s)) == PowerEmergency.Action.Restore; }
+            Check("Hail mary: a cut still ends after switching to Driver mode (safety net off)", cutOn && released, $"cut {cutOn}, restored {released}");
+        }
         Check("Hail mary: power cut after 10 s of failsafe at full fans, restored after 60 s cool",
               quietSoFar && cut == PowerEmergency.Action.Cut && stillHot == PowerEmergency.Action.None && early == PowerEmergency.Action.None
               && restore == PowerEmergency.Action.Restore && !e.Active,
