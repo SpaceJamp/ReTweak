@@ -28,6 +28,12 @@
 
         <ScrollViewer Grid.Row="1">
             <StackPanel Padding="20,4,20,20" Spacing="16">
+                <!-- Cards slide and fade in one after another when the window opens. -->
+                <StackPanel.ChildrenTransitions>
+                    <TransitionCollection>
+                        <EntranceThemeTransition IsStaggeringEnabled="True" FromVerticalOffset="40" />
+                    </TransitionCollection>
+                </StackPanel.ChildrenTransitions>
 
                 <!-- Header -->
                 <Grid>
@@ -63,6 +69,11 @@
 
                 <!-- GPU tiles -->
                 <Grid ColumnSpacing="12" RowSpacing="12">
+                    <Grid.ChildrenTransitions>
+                        <TransitionCollection>
+                            <EntranceThemeTransition IsStaggeringEnabled="True" FromVerticalOffset="30" />
+                        </TransitionCollection>
+                    </Grid.ChildrenTransitions>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition /><ColumnDefinition /><ColumnDefinition /><ColumnDefinition /><ColumnDefinition />
                     </Grid.ColumnDefinitions>
