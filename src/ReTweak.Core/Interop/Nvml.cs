@@ -11,6 +11,12 @@ internal static partial class Nvml
 {
     private const string Lib = "nvml.dll";
 
+    // Linux ships the same library as libnvidia-ml.so.1; map the Windows name to it so the bindings work unchanged.
+    // Runs before the first NVML call (and only once, as SetDllImportResolver requires).
+    static Nvml() =>
+        NativeLibrary.SetDllImportResolver(typeof(Nvml).Assembly, (name, assembly, path) =>
+            name == Lib && OperatingSystem.IsLinux() ? NativeLibrary.Load("libnvidia-ml.so.1") : 0);
+
     public const int Success = 0;
     public const int NotSupported = 3;
 

@@ -1,13 +1,12 @@
 using System.Text.Json;
-using ReTweak.Core;
 
-namespace ReTweak.App;
+namespace ReTweak.Core;
 
 /// <summary>
 /// Keeps what Auto learned about each card's airflow (<see cref="AirflowModel"/>) between sessions, in
 /// %LocalAppData%\ReTweak\airflow.json keyed by GPU name. Losing it only means relearning.
 /// </summary>
-internal static class AirflowStore
+public static class AirflowStore
 {
     private static string FilePath => Path.Combine(AppSettings.Folder, "airflow.json");
 
