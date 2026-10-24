@@ -11,7 +11,7 @@ using ReTweak.Core;
 // ReTweak.Cli --fan <pct>|curve|smart [--duration secs]   drive the fans until Ctrl+C, then hand them back (admin)
 // ReTweak.Cli --fan auto      hand the fans back to the driver (e.g. after a crash) (admin)
 // ReTweak.Cli --run [--duration secs]   what the app does, headless: your saved settings (Auto, power limit,
-//                                         emergency cut) until Ctrl+C. Windows (admin) or Linux (root)
+//                                         emergency cut, alerts) until Ctrl+C. Windows (admin) or Linux (root)
 // ReTweak.Cli --settings      the saved settings and where they live
 // ReTweak.Cli --set <setting> <value>   change one, checked like the Settings dialog: --set Fans.Mode Smart
 //                                         (under sudo this is root's settings, the ones the service uses)
@@ -217,6 +217,22 @@ static int RunFan(GpuMonitor monitor, string mode, string[] args, bool saved = f
     }
     control.Notice += (title, text) => Console.WriteLine($"*** {title}: {text}");
     control.Apply(settings);
+
+    // The app's alerts, headless: temperatures and die spread every tick, the connector pins when the card has the sensor.
+    var alerts = new AlertEngine(settings.Alerts);
+    alerts.Raised += a =>
+    {
+        Console.WriteLine($"{DateTime.Now:HH:mm:ss}  ALERT {a.Severity}: {a.Title} - {a.Detail}");
+        Diag.Write(a.Severity == AlertSeverity.Critical ? DiagLevel.Error : DiagLevel.Warn, DiagCategory.Alert, "alert raised",
+                   new { a.Key, severity = a.Severity.ToString(), a.Title, a.Detail });
+    };
+    alerts.Cleared += key =>
+    {
+        Console.WriteLine($"{DateTime.Now:HH:mm:ss}  alert cleared: {key}");
+        Diag.Info(DiagCategory.Alert, "alert cleared", new { key });
+    };
+    using var connector = monitor.HasConnectorSensor(gpu.Index) ? new ConnectorSampler(monitor, gpu.Index, alerts) : null;
+    connector?.Start();
     var done = new ManualResetEventSlim();
     Console.CancelKeyPress += (_, e) => { e.Cancel = true; done.Set(); };
     AppDomain.CurrentDomain.ProcessExit += (_, _) => control.Dispose(); // console closed: still hand the fans back
@@ -230,11 +246,13 @@ static int RunFan(GpuMonitor monitor, string mode, string[] args, bool saved = f
     {
         var s = monitor.Sample(gpu.Index, includeConnector: false);
         var st = control.Tick(s)!; // a GPU with fans: picked above
+        alerts.ProcessGpu(s);
         // To a terminal, every second; to a log (the systemd journal), only when the status changes.
         if (!Console.IsOutputRedirected || st.Text != lastText)
             Console.WriteLine($"{DateTime.Now:HH:mm:ss}  core {s.CoreTempC:F1} °C  fans {string.Join("/", s.FanPercents.Select(f => $"{f}%"))}  {st.Text}");
         lastText = st.Text;
-        if (st.NeedsAdmin) { result = 1; break; } // nothing to do until rerun as administrator
+        // --fan is a fan test: nothing to do without rights. --run still monitors and alerts.
+        if (st.NeedsAdmin && !saved) { result = 1; break; }
     } while (!done.Wait(1000) && (duration == Timeout.InfiniteTimeSpan || started.Elapsed < duration));
 
     control.Dispose();
