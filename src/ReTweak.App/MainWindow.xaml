@@ -18,7 +18,8 @@
         <!-- Custom title bar -->
         <Grid x:Name="TitleBar" Height="40" Padding="16,0,140,0">
             <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
-                <Image Source="ms-appx:///Assets/ReTweak.ico" Width="18" Height="18" />
+                <!-- Source and size set in code: the PNG drawn for this display scale, shown 1:1 so it stays sharp. -->
+                <Image x:Name="TitleIcon" Width="18" Height="18" />
                 <TextBlock Text="ReTweak" FontWeight="SemiBold" />
                 <TextBlock Text="{x:Bind local:MainWindow.VersionText}" Foreground="{ThemeResource TextFillColorTertiaryBrush}"
                            ToolTipService.ToolTip="{x:Bind local:MainWindow.VersionTooltip}" />

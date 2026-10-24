@@ -28,6 +28,7 @@
   <ItemGroup>
     <!-- Regenerate with tools/make-icons.ps1 -->
     <Content Include="Assets\*.ico" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Assets\title-*.png;Assets\notification.png" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

@@ -10,8 +10,8 @@
   1. Publishes a self-contained Release build as you (no admin needed), into artifacts\publish. Self-contained
      means ReTweak carries its own .NET runtime, so the DOTNET_ROOT environment variable can't redirect it.
   2. Asks for administrator rights once (UAC), closes a running ReTweak, copies the build to
-     C:\Program Files\ReTweak and starts it. If Start with Windows is on, the installed copy moves the
-     logon task to itself.
+     C:\Program Files\ReTweak, adds it to the Start menu and starts it. If Start with Windows is on, the
+     installed copy moves the logon task to itself.
 
   Run it again to update. Settings and learned data stay in %LocalAppData%\ReTweak.
 
@@ -82,6 +82,16 @@ try {
     Write-Host "Copying..."
     & "$env:SystemRoot\System32\robocopy.exe" $Source $target /MIR /NJH /NJS /NP /NFL /NDL | Out-Null
     if ($LASTEXITCODE -ge 8) { throw "Copy failed (robocopy $LASTEXITCODE)." }
+
+    # Start menu, for all users: that folder is admin-only too, so nothing running as you can repoint the shortcut.
+    # Opening it while ReTweak runs in the tray brings that window up (single instance).
+    $exe = Join-Path $target 'ReTweak.exe'
+    $lnk = (New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\ReTweak.lnk'))
+    $lnk.TargetPath = $exe
+    $lnk.WorkingDirectory = $target
+    $lnk.IconLocation = "$exe,0"
+    $lnk.Description = 'GPU monitoring, connector safety and fan control'
+    $lnk.Save()
 
     Write-Host "Starting ReTweak from $target..."
     Start-Process (Join-Path $target 'ReTweak.exe') -ArgumentList '--minimized'
