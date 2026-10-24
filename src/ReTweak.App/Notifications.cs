@@ -18,12 +18,39 @@ internal static class Notifications
     {
         try
         {
-            AppNotificationManager.Default.Register();
+            string iconPath = Path.Combine(AppContext.BaseDirectory, "Assets", "notification.png");
+            AppNotificationManager.Default.Register("ReTweak", new Uri(iconPath));
+            UseCurrentIcon(iconPath);
             _registered = true;
         }
-        catch
+        catch (Exception ex)
         {
             _registered = false; // toasts unavailable; in-app alerts still work
+            Diag.Error(DiagCategory.App, "notifications couldn't register; no toasts this session", ex);
+        }
+    }
+
+    /// <summary>
+    /// Windows App SDK copies the icon once, at the first registration, into its own cache and never refreshes it, even
+    /// when Register is given a new icon; the taskbar and toasts kept showing the old bolt. Point the registration at our
+    /// icon instead. It lives under HKCU\Software\Classes\AppUserModelId: the exe's path (\ as .) names a NotificationGUID,
+    /// whose key holds IconUri. Our icon sits in the install folder, which only administrators can change.
+    /// </summary>
+    private static void UseCurrentIcon(string iconPath)
+    {
+        try
+        {
+            string root = @"Software\Classes\AppUserModelId\";
+            using var byExe = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(root + Environment.ProcessPath!.Replace('\\', '.'));
+            if (byExe?.GetValue("NotificationGUID") is not string guid) return;
+            using var reg = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(root + guid, writable: true);
+            if (reg is null || string.Equals(reg.GetValue("IconUri") as string, iconPath, StringComparison.OrdinalIgnoreCase)) return;
+            reg.SetValue("IconUri", iconPath);
+            Diag.Info(DiagCategory.App, "notification icon updated", new { iconPath });
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
+        {
+            Diag.Warn(DiagCategory.App, "couldn't update the notification icon", new { ex.Message });
         }
     }
 

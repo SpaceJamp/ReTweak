@@ -9,6 +9,7 @@
 #   tray-warning.ico     tray icon with an amber status dot
 #   tray-critical.ico    tray icon with a red status dot
 #   title-<px>.png       the window's title-bar icon at each display scale's exact size
+#   notification.png     the icon on ReTweak's toasts
 # and docs/icon.png (256 px) for the README.
 #
 # Each size is drawn separately (not scaled down) so small sizes stay crisp.
@@ -148,6 +149,10 @@ foreach ($px in 18, 23, 27, 32, 36, 45) {
     [IO.File]::WriteAllBytes((Join-Path $assets "title-$px.png"), [IconMaker]::Render($px, 0))
 }
 "wrote title-*.png"
+
+# Notifications: Windows scales this down for the toast header and Action Center.
+[IO.File]::WriteAllBytes((Join-Path $assets "notification.png"), [IconMaker]::Render(96, 0))
+"wrote notification.png"
 
 $png = Join-Path $root "docs/icon.png"
 [IO.File]::WriteAllBytes($png, [IconMaker]::Render(256, 0))
