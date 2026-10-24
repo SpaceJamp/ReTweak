@@ -81,6 +81,10 @@ public sealed partial class MainViewModel : Observable, IDisposable
     public string GpuName { get; }
     public string Subtitle { get; }
     public bool HasConnector => _sampler is not null;
+    /// <summary>Why there are no per-pin readings: no chip on this card, or (ASUS) the chip couldn't be read.</summary>
+    public string NoConnectorMessage => _monitor.Gpus[_gpu].IsAsus
+        ? $"ReTweak couldn't read the ASUS Power Detector chip ({_monitor.ConnectorNote(_gpu)}), so only total board power is available."
+        : "This card doesn't have the ASUS Power Detector chip, so only total board power is available.";
     public AlertOptions AlertOptions => _settings.Alerts;
     public AppSettings Settings => _settings;
     public AlertSeverity WorstSeverity => _worst;
@@ -137,6 +141,8 @@ public sealed partial class MainViewModel : Observable, IDisposable
     private bool _fanNeedsAdmin;
     private int _fanModeIndex;
     public bool HasFanControl => _fan is not null;
+    /// <summary>False while another ReTweak (the CLI's --run / --fan) controls the fans: changing the mode here would do nothing.</summary>
+    public bool FanControlsEnabled => !(GpuControl.CanWrite && !_control.InControl);
     public string FanStatus { get => _fanStatus; private set => Set(ref _fanStatus, value); }
     public SolidColorBrush FanStatusBrush { get => _fanBrush; private set => Set(ref _fanBrush, value); }
     public bool FanNeedsAdmin { get => _fanNeedsAdmin; private set => Set(ref _fanNeedsAdmin, value); }
