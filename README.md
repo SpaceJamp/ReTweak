@@ -77,7 +77,8 @@ hotspot.
 - **Start at boot:** [linux/retweak.service](linux/retweak.service) runs `--run` as a systemd service and hands the
   fans back to the driver however it stops. Settings live in `/root/.local/share/ReTweak/settings.json` (a Windows
   `settings.json` works as is); `sudo ReTweak.Cli --settings` shows them and `--set` changes one, checked like the
-  Settings dialog: `sudo ReTweak.Cli --set PowerLimitPercent 85`, `--set Fans.Mode Smart`.
+  Settings dialog: `sudo ReTweak.Cli --set PowerLimitPercent 85`, `--set Fans.Mode Smart`, or a per-activity Auto
+  target: `--set Fans.Activities.Gaming.TargetHotspotC 65`.
 - **Diagnostic log:** `--debug`, or `--set DiagnosticsLevel Info` (or `Debug`, `Trace`) for `--run`. As root it goes
   to `/var/log/retweak`. The diagnostics bundle is app-only.
 - **RTX 50 hotspot and memory-chip temperatures:** install the small read-only kernel module in
@@ -163,6 +164,10 @@ This builds a self-contained Release (ReTweak carries its own .NET runtime) and 
 `C:\Program Files\ReTweak`, after one UAC prompt, and adds ReTweak to the Start menu (for all users; opening it while
 ReTweak runs in the tray brings its window up). If Start with Windows is on, the installed copy moves the logon task to
 itself. Run it again to update. Settings and learned data stay in `%LocalAppData%\ReTweak`.
+
+To uninstall, run it with `-Uninstall`: it closes ReTweak (the fans go back to the driver) and removes the Program Files
+folder, the Start menu entry, the Start with Windows task and the notification registration. Your settings, learned data
+and diagnostic logs stay, and it says where.
 
 ## Build and run
 

@@ -15,15 +15,33 @@
 
   Run it again to update. Settings and learned data stay in %LocalAppData%\ReTweak.
 
+  -Uninstall closes ReTweak (the fans go back to the driver) and removes what the installer and the app set up:
+  the Program Files folder, the Start menu entry, the Start with Windows task and the notification registration.
+  Your settings, learned data and diagnostic logs stay; the script says where.
+
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File tools\install.ps1
+.EXAMPLE
+  powershell -ExecutionPolicy Bypass -File tools\install.ps1 -Uninstall
 #>
 param(
     [string]$Source,        # internal: the elevated half gets the published folder
-    [switch]$Elevated
+    [switch]$Elevated,
+    [switch]$Uninstall
 )
 $ErrorActionPreference = 'Stop'
 $target = Join-Path $env:ProgramFiles 'ReTweak'
+$shortcut = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\ReTweak.lnk'
+
+if (-not $Elevated -and $Uninstall) {
+    Write-Host "Uninstalling ReTweak (Windows will ask for administrator rights)..."
+    $p = Start-Process powershell -Verb RunAs -PassThru -ArgumentList @(
+        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"", '-Elevated', '-Uninstall')
+    $p.WaitForExit()
+    if ($p.ExitCode -ne 0) { throw "Uninstall failed (exit code $($p.ExitCode)); see the messages above." }
+    Write-Host "Uninstalled. Settings and learned data are still in $env:LOCALAPPDATA\ReTweak, logs in $env:ProgramData\ReTweak; delete those folders too if you want them gone."
+    exit 0
+}
 
 if (-not $Elevated) {
     $repo = Split-Path -Parent $PSScriptRoot
@@ -45,7 +63,7 @@ if (-not $Elevated) {
 
 # ---- elevated half ----
 try {
-    if (-not (Test-Path (Join-Path $Source 'ReTweak.exe'))) { throw "No build at $Source." }
+    if (-not $Uninstall -and -not (Test-Path (Join-Path $Source 'ReTweak.exe'))) { throw "No build at $Source." }
 
     # Close a running ReTweak the way its tray menu does, so it hands the fans back first.
     Add-Type -Namespace ReTweakInstall -Name Native -MemberDefinition @'
@@ -59,6 +77,32 @@ try {
     }
     for ($i = 0; $i -lt 60 -and (Get-Process ReTweak -ErrorAction SilentlyContinue); $i++) { Start-Sleep -Milliseconds 500 }
     if (Get-Process ReTweak -ErrorAction SilentlyContinue) { throw "ReTweak is still running; exit it from the tray icon and run the installer again." }
+
+    if ($Uninstall) {
+        $schtasks = "$env:SystemRoot\System32\schtasks.exe"
+        & $schtasks /Query /TN ReTweak *> $null
+        if ($LASTEXITCODE -eq 0) {
+            & $schtasks /Delete /TN ReTweak /F | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "Couldn't remove the Start with Windows task (schtasks $LASTEXITCODE)." }
+            Write-Host "Removed Start with Windows."
+        }
+        if (Test-Path $shortcut) { Remove-Item $shortcut; Write-Host "Removed the Start menu entry." }
+        if (Test-Path $target) {
+            if ((Get-Item $target -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "$target is a link; not deleting through it." }
+            Remove-Item $target -Recurse -Force
+            Write-Host "Removed $target."
+        }
+        # The notification registration the installed copy made (its taskbar identity and toast icon). HKCU is the
+        # account that ran the script. shortcut: an admin elevating as a different account leaves it, under that user.
+        $byExe = 'HKCU:\Software\Classes\AppUserModelId\' + ((Join-Path $target 'ReTweak.exe') -replace '\\', '.')
+        if (Test-Path $byExe) {
+            $guid = (Get-ItemProperty $byExe).NotificationGUID
+            Remove-Item $byExe -Recurse
+            if ($guid) { Remove-Item "HKCU:\Software\Classes\AppUserModelId\$guid" -Recurse -ErrorAction SilentlyContinue }
+            Write-Host "Removed the notification registration."
+        }
+        exit 0
+    }
 
     # Program Files inherits an admin-only ACL; a folder someone pre-created with other rights is refused.
     if (Test-Path $target) {
@@ -86,7 +130,7 @@ try {
     # Start menu, for all users: that folder is admin-only too, so nothing running as you can repoint the shortcut.
     # Opening it while ReTweak runs in the tray brings that window up (single instance).
     $exe = Join-Path $target 'ReTweak.exe'
-    $lnk = (New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\ReTweak.lnk'))
+    $lnk = (New-Object -ComObject WScript.Shell).CreateShortcut($shortcut)
     $lnk.TargetPath = $exe
     $lnk.WorkingDirectory = $target
     $lnk.IconLocation = "$exe,0"

@@ -641,7 +641,6 @@ static class Simulate
         return run with { Airflow = fc.Airflow.Corrections.ToArray() };
     }
 
-    /// <summary>The hail mary: power cut only when full fans can't hold a failsafe, and given back once cool.</summary>
     /// <summary>--set: one setting by path, checked like the Settings dialog; nothing else changes.</summary>
     private static void SettingsSetCheck()
     {
@@ -660,6 +659,15 @@ static class Simulate
                                Refused("Toasts.Value", "1") };
         Check("--set refuses unknown names, bad values and settings the checks would reset", !refusals.Contains("accepted"),
               string.Join(" | ", refusals));
+
+        // Per-activity Auto targets sit in a keyed list; Linux has no Settings dialog to reach them otherwise.
+        var gaming = new AppSettings().With("Fans.Activities.gaming.TargetHotspotC", "65").With("fans.activities.Gaming.Priority", "tight");
+        var g = gaming.Fans.Activities[ActivityKind.Gaming];
+        string unknownActivity = Refused("Fans.Activities.Party.TargetHotspotC", "65");
+        Check("--set reaches per-activity targets and names the activities on a typo",
+              g.TargetHotspotC == 65 && g.Priority.ToString() == "Tight" && unknownActivity.Contains("Gaming")
+              && gaming.Fans.Activities[ActivityKind.Idle].TargetHotspotC == new AppSettings().Fans.Activities[ActivityKind.Idle].TargetHotspotC,
+              $"Gaming {g.TargetHotspotC} °C, {g.Priority}; typo: {unknownActivity}");
 
         // A debounce of 0 frames would fire every alert as Critical on the first reading.
         var timing = new[] { Refused("Alerts.CriticalFrames", "0"), Refused("Alerts.WarningFrames", "-1"), Refused("Alerts.ClearFrames", "0"),
@@ -681,6 +689,7 @@ static class Simulate
         after?.Dispose(); // its thread has ended, so the next claimer sees it abandoned, which counts as free
     }
 
+    /// <summary>The hail mary: power cut only when full fans can't hold a failsafe, and given back once cool.</summary>
     private static void PowerEmergencyCheck()
     {
         var e = new PowerEmergency();
