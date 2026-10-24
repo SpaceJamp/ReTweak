@@ -134,8 +134,8 @@ what it found and what to do about it.
 ## Version
 
 The version is set in `Directory.Build.props` (`VersionPrefix`); each build adds a build number
-(the git commit count) and the short commit hash, e.g. **0.9.0 (build 36, 0855fce)**, with
-"modified" when built with uncommitted changes. It's shown in the title bar, Settings → About,
+(the git commit count) and the short commit hash: **0.9.0 (build &lt;commits&gt;, &lt;hash&gt;)**, with
+"modified" when built with uncommitted changes. `ReTweak.Cli --version` prints the current one. It's shown in the title bar, Settings → About,
 `ReTweak.Cli --version`, the security check, every diagnostic log and the diagnostics zip's name.
 
 ## Layout
