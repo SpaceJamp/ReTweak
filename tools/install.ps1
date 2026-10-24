@@ -34,8 +34,10 @@ if (-not $Elevated) {
     if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed ($LASTEXITCODE)." }
     if (-not (Test-Path (Join-Path $publish 'ReTweak.exe'))) { throw "The build has no ReTweak.exe." }
     Write-Host "Installing to $target (Windows will ask for administrator rights)..."
-    $p = Start-Process powershell -Verb RunAs -Wait -PassThru -ArgumentList @(
+    # Not -Wait: it also waits for every process the elevated half starts, and that starts ReTweak, which keeps running.
+    $p = Start-Process powershell -Verb RunAs -PassThru -ArgumentList @(
         '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"", '-Elevated', '-Source', "`"$publish`"")
+    $p.WaitForExit()
     if ($p.ExitCode -ne 0) { throw "Install failed (exit code $($p.ExitCode)); see the messages above." }
     Write-Host "Installed. ReTweak is running from $target."
     exit 0
