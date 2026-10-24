@@ -57,6 +57,7 @@ static class Simulate
         SmartCheck();
         HardeningCheck();
         PowerEmergencyCheck();
+        SettingsSetCheck();
         AdaptiveCheck();
         TrustedPathsCheck();
         LinuxHotspotCheck();
@@ -641,6 +642,26 @@ static class Simulate
     }
 
     /// <summary>The hail mary: power cut only when full fans can't hold a failsafe, and given back once cool.</summary>
+    /// <summary>--set: one setting by path, checked like the Settings dialog; nothing else changes.</summary>
+    private static void SettingsSetCheck()
+    {
+        var s = new AppSettings().With("powerlimitpercent", "85").With("Fans.Mode", "smart").With("fans.failsafetempc", "80");
+        Check("--set changes settings by path, names and enums ignoring case",
+              s.PowerLimitPercent == 85 && s.Fans.Mode == FanMode.Smart && s.Fans.FailsafeTempC == 80 && s.Toasts,
+              $"{s.PowerLimitPercent} %, {s.Fans.Mode}, failsafe {s.Fans.FailsafeTempC}");
+
+        string Refused(string path, string value)
+        {
+            try { new AppSettings().With(path, value); return "accepted"; }
+            catch (ArgumentException ex) { return ex.Message; }
+        }
+        var refusals = new[] { Refused("PowerLimit", "85"), Refused("PowerLimitPercent", "300"), Refused("PowerLimitPercent", "lots"),
+                               Refused("Fans.Mode", "Turbo"), Refused("Fans.Mode", "99"), Refused("Fans.FailsafeTempC", "1000"),
+                               Refused("Toasts.Value", "1") };
+        Check("--set refuses unknown names, bad values and settings the checks would reset", !refusals.Contains("accepted"),
+              string.Join(" | ", refusals));
+    }
+
     private static void PowerEmergencyCheck()
     {
         var e = new PowerEmergency();

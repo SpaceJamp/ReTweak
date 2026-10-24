@@ -12,13 +12,18 @@ using ReTweak.Core;
 // ReTweak.Cli --fan auto      hand the fans back to the driver (e.g. after a crash) (admin)
 // ReTweak.Cli --run [--duration secs]   what the app does, headless: your saved settings (Auto, power limit,
 //                                         emergency cut) until Ctrl+C. Windows (admin) or Linux (root)
+// ReTweak.Cli --settings      the saved settings and where they live
+// ReTweak.Cli --set <setting> <value>   change one, checked like the Settings dialog: --set Fans.Mode Smart
+//                                         (under sudo this is root's settings, the ones the service uses)
 // add --debug to any of these for a full diagnostic log
 // ReTweak.Cli --version          version and build number
 // ReTweak.Cli --security-check   audit ReTweak's files, autostart, PawnIO, data folders and Windows protections
 // ReTweak.Cli --hold-test        check the elevated folder holds against renames and junctions (admin)
 
 // --debug: full diagnostic log (JSON lines) to %LocalAppData%\ReTweak\diagnostics, like the app's --debug.
-if (args.Contains("--debug"))
+// --run also follows the saved DiagnosticsLevel, like the app (Settings -> Diagnostics, or --set DiagnosticsLevel Info).
+var diagLevel = args.Contains("--debug") ? DiagLevel.Trace : args.Contains("--run") ? AppSettings.Load().DiagnosticsLevel : DiagLevel.Off;
+if (diagLevel != DiagLevel.Off)
 {
     // Same rule as the app: elevated, only into the admin-only %ProgramData% folder. Root on Linux: /var/log, root-only already.
     bool windowsAdmin = TrustedPaths.IsElevated && OperatingSystem.IsWindows();
@@ -31,7 +36,7 @@ if (args.Contains("--debug"))
         Console.WriteLine($"Couldn't secure {diagFolder}; running without the diagnostic log.");
         diagFolder = "";
     }
-    if (diagFolder.Length > 0) Diag.Configure(DiagLevel.Trace, diagFolder);
+    if (diagFolder.Length > 0) Diag.Configure(diagLevel, diagFolder);
     Diag.Info(DiagCategory.App, "cli started", new { args, admin = Environment.IsPrivilegedProcess });
     AppDomain.CurrentDomain.ProcessExit += (_, _) => Diag.Shutdown();
     if (diagFolder.Length > 0) Console.WriteLine($"Diagnostic log: {diagFolder}");
@@ -71,6 +76,27 @@ if (replayIdx >= 0 && replayIdx + 1 < args.Length)
 if (args.Contains("--simulate"))
 {
     Environment.ExitCode = Simulate.Run();
+    return;
+}
+
+if (args.Contains("--settings"))
+{
+    Console.WriteLine($"{AppSettings.FilePath}{(File.Exists(AppSettings.FilePath) ? "" : " (not saved yet: defaults)")}");
+    Console.WriteLine(AppSettings.Load().Describe());
+    return;
+}
+
+int setIdx = Array.IndexOf(args, "--set");
+if (setIdx >= 0)
+{
+    if (setIdx + 2 >= args.Length) { Console.WriteLine("Usage: --set <setting> <value>, e.g. --set PowerLimitPercent 85 or --set Fans.Mode Smart"); Environment.ExitCode = 1; return; }
+    try
+    {
+        var changed = AppSettings.Load().With(args[setIdx + 1], args[setIdx + 2]);
+        changed.Save();
+        Console.WriteLine($"Saved {args[setIdx + 1]} = {args[setIdx + 2]} to {AppSettings.FilePath}. A running --run or app picks it up when restarted.");
+    }
+    catch (ArgumentException ex) { Console.WriteLine($"Not saved: {ex.Message}"); Environment.ExitCode = 1; }
     return;
 }
 
