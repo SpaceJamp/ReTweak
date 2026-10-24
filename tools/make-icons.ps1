@@ -8,6 +8,7 @@
 #   tray.ico             tray icon, normal state (16/20/24/32 px)
 #   tray-warning.ico     tray icon with an amber status dot
 #   tray-critical.ico    tray icon with a red status dot
+#   title-<px>.png       the window's title-bar icon at each display scale's exact size
 # and docs/icon.png (256 px) for the README.
 #
 # Each size is drawn separately (not scaled down) so small sizes stay crisp.
@@ -137,6 +138,13 @@ Write-Icon "ReTweak.ico" @(16, 20, 24, 32, 40, 48, 64, 128, 256) 0
 Write-Icon "tray.ico" @(16, 20, 24, 32) 0
 Write-Icon "tray-warning.ico" @(16, 20, 24, 32) 1
 Write-Icon "tray-critical.ico" @(16, 20, 24, 32) 2
+
+# Title bar: 18 DIP at 100/125/150/175/200/250 % display scale, drawn at the exact pixel size so it isn't resampled
+# (the .ico has 24 and 32 px but not the 27 px a 150 % display needs, and scaling one of them blurs it).
+foreach ($px in 18, 23, 27, 32, 36, 45) {
+    [IO.File]::WriteAllBytes((Join-Path $assets "title-$px.png"), [IconMaker]::Render($px, 0))
+}
+"wrote title-*.png"
 
 $png = Join-Path $root "docs/icon.png"
 [IO.File]::WriteAllBytes($png, [IconMaker]::Render(256, 0))
