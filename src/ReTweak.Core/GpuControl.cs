@@ -16,10 +16,20 @@ public sealed class GpuControl : IDisposable
     private int? _powerLimitApplied;
     private AppSettings _settings = new();
     private bool _disposed;
+    private readonly Mutex? _claim;
+
+    /// <summary>
+    /// Held by the one ReTweak that controls the fans and power (the app, or the CLI's --run / --fan), so two never
+    /// fight over them. Per session on Windows, like the app's single-instance lock; system-wide on Linux, where the
+    /// service has no session.
+    /// </summary>
+    public static readonly string ClaimName = OperatingSystem.IsWindows() ? @"Local\ReTweak.Control" : @"Global\ReTweak.Control";
 
     /// <summary>Null if the card reports no fans.</summary>
     public FanController? Fan { get; }
     public static bool CanWrite => Environment.IsPrivilegedProcess;
+    /// <summary>False when another ReTweak already controls the fans and power: this one only reads.</summary>
+    public bool InControl => _claim is not null;
     public bool EmergencyActive => _emergency.Active;
     public double EmergencyWatts { get; private set; }
     public bool EmergencyFailed { get; private set; }
@@ -34,6 +44,8 @@ public sealed class GpuControl : IDisposable
         _monitor = monitor;
         _gpu = gpu;
         _gpuName = monitor.Gpus[gpu].Name;
+        // Unelevated, writes fail anyway: don't take the claim from an elevated copy that can use it.
+        if (CanWrite) _claim = TryClaim(ClaimName);
         if (monitor.FanCount(gpu) == 0) return;
         Fan = new FanController(monitor, gpu);
         Fan.Airflow.Load(AirflowStore.Load(_gpuName)); // what Auto learned about this card last time
@@ -51,6 +63,8 @@ public sealed class GpuControl : IDisposable
     public FanStatus? Tick(GpuSnapshot s)
     {
         if (Fan is null) return null;
+        if (CanWrite && !InControl)
+            return new(Fan.Options.Mode, null, "Another ReTweak is controlling the fans and power; this one only reads.", AlertSeverity.Warning);
         var fg = Fan.Options.UseForegroundApp ? Foreground.Read() : ForegroundApp.None;
         FanStatus st;
         try { st = Fan.Tick(FanTemps.From(s, fg)); }
@@ -69,7 +83,7 @@ public sealed class GpuControl : IDisposable
     private void ApplyPowerLimit(int percent)
     {
         // During a hail-mary cut, a Settings save must not put the power back early: the cut ends by itself.
-        if (_emergency.Active || percent == (_powerLimitApplied ?? 100) || !CanWrite || _monitor.PowerLimits(_gpu) is null) return;
+        if (_emergency.Active || percent == (_powerLimitApplied ?? 100) || !InControl || _monitor.PowerLimits(_gpu) is null) return;
         string? error = _monitor.SetPowerLimitPercent(_gpu, percent, out double watts);
         if (error is null) _powerLimitApplied = percent;
         // watts is what the driver got: a % outside its range is clamped (50 % became 250 W, 62.5 %, on an RTX 5080).
@@ -108,8 +122,30 @@ public sealed class GpuControl : IDisposable
         _disposed = true;
         // Exiting during a cut: give the user's limit back, or it stays at the minimum until a reboot (a 100 %
         // setting is left alone at the next start).
-        if (_emergency.Active && CanWrite) _monitor.SetPowerLimitPercent(_gpu, _settings.PowerLimitPercent, out _);
+        if (_emergency.Active && InControl) _monitor.SetPowerLimitPercent(_gpu, _settings.PowerLimitPercent, out _);
+        if (CanWrite && !InControl) return; // the fans are the other ReTweak's: don't hand them back under it
         if (Fan is not null) AirflowStore.Save(_gpuName, Fan.Airflow.Corrections);
         Fan?.Dispose(); // back to the driver's curve before NVML shuts down
+        if (_claim is not null)
+        {
+            try { _claim.ReleaseMutex(); }
+            catch (ApplicationException) { } // disposed from another thread (ProcessExit): the exit releases it
+            _claim.Dispose();
+        }
+    }
+
+    /// <summary>The control claim, or null if another process holds it. Public for the simulation.</summary>
+    public static Mutex? TryClaim(string name)
+    {
+        Mutex m;
+        try { m = new Mutex(false, name); }
+        catch (UnauthorizedAccessException) { return null; } // held by a process with rights we lack
+        try
+        {
+            if (m.WaitOne(0)) return m;
+        }
+        catch (AbandonedMutexException) { return m; } // its holder died without letting go: ours now
+        m.Dispose();
+        return null;
     }
 }

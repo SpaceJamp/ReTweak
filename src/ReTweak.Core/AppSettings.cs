@@ -125,6 +125,11 @@ public sealed record AppSettings
                 ? JsonValue.Create(Convert.ToInt32(e))
                 : throw new ArgumentException($"'{value}' isn't one of: {string.Join(", ", Enum.GetNames(t))}.");
         if (t == typeof(string)) return JsonValue.Create(value);
+        // JSON stores a TimeSpan as a string ("00:00:20"); take it bare instead of making people quote it.
+        if (t == typeof(TimeSpan))
+            return TimeSpan.TryParse(value, System.Globalization.CultureInfo.InvariantCulture, out var span)
+                ? JsonValue.Create(span.ToString("c"))
+                : throw new ArgumentException($"'{value}' isn't a time; use hours:minutes:seconds, e.g. 00:00:20.");
         try { return JsonNode.Parse(value); }
         catch (JsonException) { throw new ArgumentException($"'{value}' isn't a valid {t.Name}."); }
     }
@@ -150,6 +155,10 @@ public sealed record AppSettings
         foreach (var (name, w, c) in new[] { ("Core", o.WarnCoreTempC, o.CriticalCoreTempC), ("Memory", o.WarnMemoryTempC, o.CriticalMemoryTempC),
                                          ("Hotspot", o.WarnHotspotTempC, o.CriticalHotspotTempC) })
             if (w < 30 || c <= w || c > 125) return $"{name} temperature: warning must be at least 30 °C and below critical (max 125 °C).";
+        // Debounce: a target of 0 counts as reached on every reading, so every alert would fire as Critical at once.
+        if (o.CriticalFrames < 1 || o.WarningFrames < 1 || o.ClearFrames < 1 || o.ReadFailuresForAlert < 1 || o.TrendMinFrames < 2
+            || o.TrendRecentFrames < 2 || o.TrendFrames < 1 || o.StaleAfter <= TimeSpan.Zero || o.TrendWindow <= TimeSpan.Zero || o.TrendHorizon < TimeSpan.Zero)
+            return "Alert timing: frame counts must be at least 1 (trend frames at least 2) and times above 0.";
         if (o.WarnDieSpreadC < 10 || o.CriticalDieSpreadC <= o.WarnDieSpreadC || o.CriticalDieSpreadC > 100)
             return "Die spread: warning must be at least 10 °C and below critical (max 100 °C).";
         return null;

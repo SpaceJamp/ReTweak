@@ -210,6 +210,11 @@ static int RunFan(GpuMonitor monitor, string mode, string[] args, bool saved = f
         ? TimeSpan.FromSeconds(secs) : Timeout.InfiniteTimeSpan;
 
     using var control = new GpuControl(monitor, gpu.Index); // the same loop as the app: fans, power limit, emergency cut
+    if (GpuControl.CanWrite && !control.InControl)
+    {
+        Console.WriteLine("Another ReTweak (the app, the service or another --run / --fan) is controlling the fans and power. Stop it first.");
+        return 1;
+    }
     control.Notice += (title, text) => Console.WriteLine($"*** {title}: {text}");
     control.Apply(settings);
     var done = new ManualResetEventSlim();
@@ -220,16 +225,20 @@ static int RunFan(GpuMonitor monitor, string mode, string[] args, bool saved = f
                       (saved ? $", power limit {settings.PowerLimitPercent} %" : "") + $"){(GpuControl.CanWrite ? "" : " - read-only: run as admin/root to write")}. Ctrl+C to stop.");
     var started = System.Diagnostics.Stopwatch.StartNew();
     int result = 0;
+    string? lastText = null;
     do
     {
         var s = monitor.Sample(gpu.Index, includeConnector: false);
         var st = control.Tick(s)!; // a GPU with fans: picked above
-        Console.WriteLine($"{DateTime.Now:HH:mm:ss}  core {s.CoreTempC:F1} °C  fans {string.Join("/", s.FanPercents.Select(f => $"{f}%"))}  {st.Text}");
+        // To a terminal, every second; to a log (the systemd journal), only when the status changes.
+        if (!Console.IsOutputRedirected || st.Text != lastText)
+            Console.WriteLine($"{DateTime.Now:HH:mm:ss}  core {s.CoreTempC:F1} °C  fans {string.Join("/", s.FanPercents.Select(f => $"{f}%"))}  {st.Text}");
+        lastText = st.Text;
         if (st.NeedsAdmin) { result = 1; break; } // nothing to do until rerun as administrator
     } while (!done.Wait(1000) && (duration == Timeout.InfiniteTimeSpan || started.Elapsed < duration));
 
     control.Dispose();
-    if (GpuControl.CanWrite) Console.WriteLine("Fans handed back to the driver.");
+    if (control.InControl) Console.WriteLine("Fans handed back to the driver.");
     return result;
 }
 

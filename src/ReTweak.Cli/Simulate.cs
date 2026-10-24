@@ -660,6 +660,25 @@ static class Simulate
                                Refused("Toasts.Value", "1") };
         Check("--set refuses unknown names, bad values and settings the checks would reset", !refusals.Contains("accepted"),
               string.Join(" | ", refusals));
+
+        // A debounce of 0 frames would fire every alert as Critical on the first reading.
+        var timing = new[] { Refused("Alerts.CriticalFrames", "0"), Refused("Alerts.WarningFrames", "-1"), Refused("Alerts.ClearFrames", "0"),
+                             Refused("Alerts.StaleAfter", "00:00:00"), Refused("Alerts.StaleAfter", "soon") };
+        var stale = new AppSettings().With("alerts.staleafter", "00:00:20").Alerts.StaleAfter;
+        Check("--set refuses zero debounce and times, and takes a bare time", !timing.Contains("accepted") && stale == TimeSpan.FromSeconds(20),
+              $"StaleAfter {stale}; " + string.Join(" | ", timing));
+
+        // One controller at a time: a second claim (here another thread; across processes the OS does the same) is refused.
+        string name = (OperatingSystem.IsWindows() ? @"Local\" : @"Global\") + $"ReTweak.Test.{Guid.NewGuid():N}";
+        var first = GpuControl.TryClaim(name);
+        Mutex? Elsewhere() { Mutex? m = null; var t = new Thread(() => m = GpuControl.TryClaim(name)); t.Start(); t.Join(); return m; }
+        var second = Elsewhere();
+        first?.ReleaseMutex();
+        first?.Dispose();
+        var after = Elsewhere();
+        Check("Only one ReTweak controls the fans; the claim frees when its holder stops", first is not null && second is null && after is not null,
+              $"first {first is not null}, second while held {second is not null}, after release {after is not null}");
+        after?.Dispose(); // its thread has ended, so the next claimer sees it abandoned, which counts as free
     }
 
     private static void PowerEmergencyCheck()
