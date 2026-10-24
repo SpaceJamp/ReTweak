@@ -1096,6 +1096,18 @@ static class Simulate
                       got is null ? why : $"{reader!.Source}: {string.Join(", ", got)}");
             }
 
+            // The connector chip's bus: this GPU's i2c-N folders, matched by the nvidia driver's adapter name and port.
+            foreach (var (bus, name) in new[] { ("i2c-2", "NVIDIA i2c adapter 0 at 1:00.0"), ("i2c-3", "NVIDIA i2c adapter 1 at 1:00.0"),
+                                                ("i2c-9", "Synopsys DesignWare I2C adapter") })
+            {
+                Directory.CreateDirectory(Path.Combine(dir, bus));
+                File.WriteAllText(Path.Combine(dir, bus, "name"), name + "\n");
+            }
+            string? port1 = ReTweak.Core.Interop.LinuxI2c.FindBus(dir, 1, out var seen);
+            string? port5 = ReTweak.Core.Interop.LinuxI2c.FindBus(dir, 5, out _);
+            Check("Linux connector: finds the nvidia driver's bus for port 1 under this GPU", port1 == "/dev/i2c-3" && port5 is null && seen.Length == 3,
+                  $"port 1 -> {port1 ?? "none"}, port 5 -> {port5 ?? "none"}; saw {string.Join("; ", seen)}");
+
             File.WriteAllText(Path.Combine(dir, "vendor"), "0x1002\n");
             bool refused = NvidiaHotspot.TryCreateLinux(dir, noModule, out var other, out _) is null && other == HotspotAvailability.Unsupported;
             bool missing = NvidiaHotspot.TryCreateLinux(Path.Combine(dir, "nope"), noModule, out var gone, out _) is null && gone == HotspotAvailability.Unsupported;

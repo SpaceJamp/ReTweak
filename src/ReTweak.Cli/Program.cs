@@ -173,6 +173,8 @@ do
         }
         else if (monitor.HasConnectorSensor(gpu.Index))
             Console.WriteLine("    connector: read failed");
+        else if (gpu.IsAsus)
+            Console.WriteLine($"    connector: - ({monitor.ConnectorNote(gpu.Index)})");
     }
     if (watch) { Thread.Sleep(1000); Console.WriteLine(); }
 } while (watch);

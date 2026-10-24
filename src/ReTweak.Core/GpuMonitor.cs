@@ -13,7 +13,7 @@ public sealed class GpuMonitor : IDisposable
 {
     private sealed record Device(GpuInfo Info, nint Nvml, uint FanCount, AsusPowerDetector? Detector, NvidiaThermal? Thermal,
                                  HotspotSampler? Hotspot, HotspotAvailability HotspotState, string HotspotNote,
-                                 PowerLimits? Limits);
+                                 PowerLimits? Limits, string ConnectorNote);
 
     private readonly List<Device> _devices = [];
     private bool _disposed;
@@ -69,12 +69,19 @@ public sealed class GpuMonitor : IDisposable
             string hotspotNote = OperatingSystem.IsWindows() ? "Not reported by this card" : "Not read on Linux for this card";
             var hotspotState = HotspotAvailability.NotApplicable;
             uint? arch = Nvml.DeviceGetArchitecture(handle, out uint a) == Nvml.Success ? a : null;
+            string connectorNote = info.IsAsus ? "ASUS connector chip not found" : "not an ASUS card";
             if (nvapi is not null && nvapiByBus.TryGetValue(pci.Bus, out var nvHandle))
             {
                 if (info.IsAsus) detector = AsusPowerDetector.TryCreate(nvapi, nvHandle);
                 uint? nvmlCore = Nvml.DeviceGetTemperature(handle, 0, out uint c) == Nvml.Success ? c : null;
                 if (arch is uint ar) thermal = NvidiaThermal.TryCreate(nvapi, nvHandle, ar, nvmlCore);
             }
+            else if (OperatingSystem.IsLinux() && info.IsAsus)
+            {
+                detector = AsusPowerDetector.TryCreateLinux($"/sys/bus/pci/devices/{LinuxPciAddress(pci)}", out connectorNote);
+                Diag.Info(DiagCategory.Connector, "connector sensor", new { gpu = info.Index, found = detector is not null, note = connectorNote });
+            }
+            if (detector is not null && OperatingSystem.IsWindows()) connectorNote = $"connector chip v{detector.Version:X}";
             // RTX 50 dropped the hotspot from the driver APIs; read the GPU register instead: through PawnIO on
             // Windows, a read-only mapping of BAR0 from sysfs on Linux.
             if (arch == Nvml.ArchBlackwell && (OperatingSystem.IsWindows() || OperatingSystem.IsLinux()))
@@ -91,7 +98,7 @@ public sealed class GpuMonitor : IDisposable
             PowerLimits? limits = Nvml.DeviceGetPowerManagementLimitConstraints(handle, out uint minMw, out uint maxMw) == Nvml.Success
                                   && Nvml.DeviceGetPowerManagementDefaultLimit(handle, out uint defMw) == Nvml.Success && defMw > 0
                 ? new PowerLimits(minMw / 1000.0, maxMw / 1000.0, defMw / 1000.0) : null;
-            _devices.Add(new Device(info, handle, fans, detector, thermal, hotspot, hotspotState, hotspotNote, limits));
+            _devices.Add(new Device(info, handle, fans, detector, thermal, hotspot, hotspotState, hotspotNote, limits, connectorNote));
         }
     }
 
@@ -107,6 +114,9 @@ public sealed class GpuMonitor : IDisposable
     }
 
     public bool HasHotspot(int gpuIndex) => _devices[gpuIndex].Hotspot is not null;
+
+    /// <summary>Where the connector readings come from, or why there are none.</summary>
+    public string ConnectorNote(int gpuIndex) => _devices[gpuIndex].ConnectorNote;
 
     /// <summary>The hotspot is averaged over this window; a fresh monitor needs this long for a full one.</summary>
     public static TimeSpan HotspotWindow => HotspotSampler.WindowLength;

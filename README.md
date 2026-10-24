@@ -68,8 +68,12 @@ How the register was found: [docs/power-detector.md](docs/power-detector.md#hots
 
 The CLI runs on Linux (`dotnet publish src/ReTweak.Cli -c Release -r linux-x64 --self-contained`), through NVML:
 monitoring, `--fans`, `--fan`, and `--run`, which runs the app's control loop headless with your saved settings
-(fans, power limit, emergency cut). Writing needs root. Not on Linux yet: the app window, the ASUS connector
-pins (NVAPI) and the RTX 30/40 hotspot.
+(fans, power limit, emergency cut, alerts). Writing needs root. Not on Linux yet: the app window and the RTX 30/40
+hotspot.
+
+- **Connector pins (ASUS Power Detector+):** read as root through the nvidia driver's I2C bus. Load i2c-dev once and at
+  every boot: `sudo modprobe i2c-dev` and `echo i2c-dev | sudo tee /etc/modules-load.d/i2c-dev.conf`. The snapshot
+  says where the chip was found, or why not.
 
 - **Start at boot:** [linux/retweak.service](linux/retweak.service) runs `--run` as a systemd service and hands the
   fans back to the driver however it stops. Settings live in `/root/.local/share/ReTweak/settings.json` (a Windows
