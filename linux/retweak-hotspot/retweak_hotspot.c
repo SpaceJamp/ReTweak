@@ -8,6 +8,11 @@
  *     /sys/kernel/retweak_hotspot/<pci address>/channels
  * as six hex values, readable by any user. It never writes to the GPU, doesn't bind to it
  * (the nvidia driver keeps it) and doesn't need iomem=relaxed.
+ *
+ * It also shows the memory-chip temperatures (whole °C, the sensors that report) in
+ *     /sys/kernel/retweak_hotspot/<pci address>/memory
+ * from the BAR0 + 0x900000 block, read exactly as PawnIO's NVIDIA module 0.2.11 does on Windows
+ * (ioctl_read_memory_temperatures in Nvidia.p, LGPL-2.1+).
  */
 #include <linux/io.h>
 #include <linux/kobject.h>
@@ -31,9 +36,20 @@ static int get_if_awake(struct device *dev)
 #define CHANNEL_COUNT 6
 #define MAX_GPUS 8
 
+/* Memory temperatures: 24 groups of 0x4000 from BAR0 + 0x900000, as in PawnIO's module. */
+#define MEM_BASE 0x900000
+#define MEM_SIZE 0x60000
+#define MEM_TOPOLOGY 0x200
+#define MEM_GROUP_STRIDE 0x4000
+#define MEM_MASK 0x24D0
+#define MEM_GROUPS 24
+#define MEM_SENSORS 48
+static const u32 mem_offsets[8] = { 0x24C0, 0x24C4, 0x24C8, 0x24CC, 0x1348, 0x134C, 0x1350, 0x1354 };
+
 struct gpu {
 	struct pci_dev *pdev;
 	void __iomem *page;	/* the page holding the channels */
+	void __iomem *mem;	/* the memory-temperature block, or NULL */
 	struct kobject *kobj;
 };
 
@@ -51,6 +67,26 @@ static struct gpu *gpu_of(struct kobject *kobj)
 	return NULL;
 }
 
+/*
+ * Never wake a sleeping GPU (laptops) just for a temperature, and keep it from going to sleep mid-read:
+ * the reference holds it awake. Runtime PM off (most desktops): the device stays in D0 unless suspended.
+ * Returns what release_awake needs, or -EAGAIN when the GPU is asleep.
+ */
+static int hold_awake(struct gpu *g)
+{
+	int awake = get_if_awake(&g->pdev->dev);
+
+	if (awake == 0 || (awake < 0 && g->pdev->current_state != PCI_D0))
+		return -EAGAIN;
+	return awake;
+}
+
+static void release_awake(struct gpu *g, int awake)
+{
+	if (awake > 0)
+		pm_runtime_put(&g->pdev->dev);
+}
+
 static ssize_t channels_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 {
 	struct gpu *g = gpu_of(kobj);
@@ -60,22 +96,86 @@ static ssize_t channels_show(struct kobject *kobj, struct kobj_attribute *attr, 
 
 	if (!g)
 		return -ENODEV;
-	/*
-	 * Never wake a sleeping GPU (laptops) just for a temperature, and keep it from going to sleep mid-read:
-	 * the reference holds it awake. Runtime PM off (most desktops): the device stays in D0 unless suspended.
-	 */
-	awake = get_if_awake(&g->pdev->dev);
-	if (awake == 0 || (awake < 0 && g->pdev->current_state != PCI_D0))
+	awake = hold_awake(g);
+	if (awake == -EAGAIN)
 		return -EAGAIN;
 	for (i = 0; i < CHANNEL_COUNT; i++)
 		len += sysfs_emit_at(buf, len, "%08x%c", readl(g->page + off + 4 * i),
 				     i == CHANNEL_COUNT - 1 ? '\n' : ' ');
-	if (awake > 0)
-		pm_runtime_put(&g->pdev->dev);
+	release_awake(g, awake);
 	return len;
 }
 
 static struct kobj_attribute channels_attr = __ATTR_RO(channels);
+
+/* All ones, or 0xBADF in the top half: the GPU didn't answer this register. */
+static bool bad_read(u32 v)
+{
+	return v == 0xFFFFFFFF || (v & 0xFFFF0000) == 0xBADF0000;
+}
+
+/* The memory-chip temperatures that report, in °C, space-separated (an empty line if none do). */
+static ssize_t memory_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
+{
+	struct gpu *g = gpu_of(kobj);
+	ssize_t len = 0;
+	int index, awake;
+	u32 topology;
+
+	if (!g || !g->mem)
+		return -ENODEV;
+	awake = hold_awake(g);
+	if (awake == -EAGAIN)
+		return -EAGAIN;
+	topology = readl(g->mem + MEM_TOPOLOGY);
+	if (bad_read(topology)) {
+		release_awake(g, awake);
+		return -EIO;
+	}
+	for (index = 0; index < MEM_SENSORS; index++) {
+		int group, chip, first_input = 0, input_offset, temp = 0;
+		bool have = false;
+		u32 mask;
+
+		if (topology & 0x00400000) {
+			group = index >> 2;
+			chip = (index >> 1) & 1;
+			first_input = index & 1;
+		} else {
+			group = index >> 1;
+			chip = index & 1;
+		}
+		if (group >= MEM_GROUPS)
+			continue;
+		mask = readl(g->mem + group * MEM_GROUP_STRIDE + MEM_MASK);
+		if (bad_read(mask))
+			continue;
+		mask = (mask >> 24) & 0xFF;
+		/* Two inputs per chip; the hotter one counts. */
+		for (input_offset = 0; input_offset <= 2; input_offset += 2) {
+			int sensor = chip + 2 * (first_input + input_offset), t;
+			u32 raw;
+
+			if (!(mask & (1 << sensor)))
+				continue;
+			raw = readl(g->mem + group * MEM_GROUP_STRIDE + mem_offsets[sensor]);
+			if (bad_read(raw))
+				continue;
+			t = ((int)((raw >> 16) & 0xFF) - 20) * 2;
+			if (!have || t > temp) {
+				temp = t;
+				have = true;
+			}
+		}
+		if (have)
+			len += sysfs_emit_at(buf, len, "%s%d", len ? " " : "", temp);
+	}
+	len += sysfs_emit_at(buf, len, "\n");
+	release_awake(g, awake);
+	return len;
+}
+
+static struct kobj_attribute memory_attr = __ATTR_RO(memory);
 
 /* PMC_BOOT_0 (BAR0 + 0) bits 28:20 are the chip; 0x1b2-0x1b7 are GB202-GB207, the only chips with these registers. */
 static bool is_supported_chip(struct pci_dev *pdev)
@@ -116,6 +216,12 @@ static void add_gpu(struct pci_dev *pdev)
 		iounmap(g->page);
 		return;
 	}
+	/* Memory temperatures are a bonus: without them the hotspot still works. */
+	g->mem = pci_resource_len(pdev, 0) >= MEM_BASE + MEM_SIZE ? ioremap(start + MEM_BASE, MEM_SIZE) : NULL;
+	if (g->mem && sysfs_create_file(g->kobj, &memory_attr.attr)) {
+		iounmap(g->mem);
+		g->mem = NULL;
+	}
 	g->pdev = pci_dev_get(pdev);
 	gpu_count++;
 	pr_info("retweak_hotspot: %s\n", pci_name(pdev));
@@ -126,8 +232,10 @@ static void remove_all(void)
 	while (gpu_count > 0) {
 		struct gpu *g = &gpus[--gpu_count];
 
-		kobject_put(g->kobj);	/* removes the file first, so no reader is left using the mapping */
+		kobject_put(g->kobj);	/* removes the files first, so no reader is left using the mappings */
 		iounmap(g->page);
+		if (g->mem)
+			iounmap(g->mem);
 		pci_dev_put(g->pdev);
 	}
 	kobject_put(root);
@@ -161,4 +269,4 @@ static void __exit retweak_hotspot_exit(void)
 module_init(retweak_hotspot_init);
 module_exit(retweak_hotspot_exit);
 MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("Read-only RTX 50 hotspot registers for ReTweak");
+MODULE_DESCRIPTION("Read-only RTX 50 hotspot and memory temperatures for ReTweak");

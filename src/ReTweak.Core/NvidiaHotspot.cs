@@ -160,7 +160,19 @@ public sealed class NvidiaHotspot : IDisposable
     /// </summary>
     public int[]? ReadMemoryChips()
     {
-        // shortcut: memory chips come from PawnIO's module only; port its 0x900000 block read if Linux needs them.
+        // Linux: the retweak_hotspot module's "memory" file next to "channels" (same read as PawnIO's). Not through the
+        // BAR0 fallback, which only maps the hotspot page.
+        if (_moduleFile is not null)
+        {
+            try
+            {
+                var chips = File.ReadAllText(Path.Combine(Path.GetDirectoryName(_moduleFile)!, "memory"))
+                    .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                    .Select(t => int.TryParse(t, out int c) ? c : 0).Where(t => t is > 0 and < 150).ToArray();
+                return chips.Length > 0 ? chips : null;
+            }
+            catch (IOException) { return null; } // an older module without the file, or the GPU asleep
+        }
         if (_pawnIo is null) return null;
         if (_pawnIo.Execute(MemoryFunction, _pciAddress, MemorySensorCount + 2) is not { Length: MemorySensorCount + 2 } r
             || r[1] != MemorySensorCount) return null;

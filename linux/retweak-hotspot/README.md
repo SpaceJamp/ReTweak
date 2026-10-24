@@ -8,6 +8,8 @@ no longer reports it on Blackwell, so it's read from the GPU's thermal registers
 - Works under Secure Boot lockdown and without `iomem=relaxed`, which block ReTweak's fallback
   (mapping the registers from user space as root).
 - Any user can read `/sys/kernel/retweak_hotspot/<pci address>/channels`, so ReTweak doesn't need root for the hotspot.
+- Also `.../memory`: the memory-chip temperatures (whole °C, the sensors that report), read the same way as PawnIO's
+  NVIDIA module on Windows. Auto uses them to steer, as it does on Windows.
 
 License: this module is GPL-2.0 (as the kernel requires), unlike the rest of ReTweak (GPL-3.0).
 
