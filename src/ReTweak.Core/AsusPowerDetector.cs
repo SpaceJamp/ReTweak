@@ -28,35 +28,63 @@ internal sealed class AsusPowerDetector
         ["VRM 1", "Core", "Memory 1", "Memory 2", "VRM 2", "Sensor 6", "Sensor 7", "Sensor 8"];
     public const int MemorySensor1 = 2, MemorySensor2 = 3;
 
-    private readonly NvApi _nvapi;
-    private readonly nint _gpu;
+    /// <summary>Reads buffer.Length bytes from a register of the chip; false if the bus said no.</summary>
+    private delegate bool RegisterRead(byte register, Span<byte> buffer);
+
+    private readonly RegisterRead _read;
     // The connector sampler and the GPU poll run on different threads; keep their I2C transactions apart.
     private readonly object _bus = new();
 
     public ushort Version { get; }
 
-    private AsusPowerDetector(NvApi nvapi, nint gpu, ushort version)
+    private AsusPowerDetector(RegisterRead read, ushort version)
     {
-        _nvapi = nvapi;
-        _gpu = gpu;
+        _read = read;
         Version = version;
     }
 
-    /// <summary>Returns a detector if the chip answers with a supported version.</summary>
-    public static AsusPowerDetector? TryCreate(NvApi nvapi, nint gpu)
+    /// <summary>Windows: through NVAPI. Returns a detector if the chip answers with a supported version.</summary>
+    public static AsusPowerDetector? TryCreate(NvApi nvapi, nint gpu) =>
+        TryCreate((reg, buf) => nvapi.I2CRead(gpu, Port, Address, reg, buf) == 0);
+
+    /// <summary>
+    /// Linux: through the nvidia driver's I2C bus for the same port, from i2c-dev. The bus stays open for the
+    /// session (ReTweak never closes a GpuMonitor's sensors early). Null with <paramref name="note"/> saying why.
+    /// </summary>
+    public static AsusPowerDetector? TryCreateLinux(string pciDeviceFolder, out string note)
+    {
+        string? device = LinuxI2c.FindBus(pciDeviceFolder, Port, out var seen);
+        if (device is null)
+        {
+            note = $"no \"NVIDIA i2c adapter {Port}\" under {pciDeviceFolder} (found: {(seen.Length > 0 ? string.Join("; ", seen) : "none")})";
+            return null;
+        }
+        var bus = LinuxI2c.TryOpen(device, Address >> 1, out string? error); // i2c-dev takes the 7-bit address
+        if (bus is null) { note = error!; return null; }
+        var detector = TryCreate(bus.Read);
+        if (detector is null)
+        {
+            bus.Dispose();
+            note = $"the connector chip didn't answer on {device}";
+            return null;
+        }
+        note = $"connector chip v{detector.Version:X} on {device}";
+        return detector;
+    }
+
+    private static AsusPowerDetector? TryCreate(RegisterRead read)
     {
         Span<byte> lo = stackalloc byte[1], hi = stackalloc byte[1];
-        if (nvapi.I2CRead(gpu, Port, Address, RegIdLow, lo) != 0) return null;
-        if (nvapi.I2CRead(gpu, Port, Address, RegIdHigh, hi) != 0) return null;
+        if (!read(RegIdLow, lo) || !read(RegIdHigh, hi)) return null;
         ushort version = (ushort)(hi[0] << 8 | lo[0]);
-        return version >= MinVersion ? new AsusPowerDetector(nvapi, gpu, version) : null;
+        return version >= MinVersion ? new AsusPowerDetector(read, version) : null;
     }
 
     public ConnectorReading? Read()
     {
         Span<byte> buf = stackalloc byte[24];
         lock (_bus)
-            if (_nvapi.I2CRead(_gpu, Port, Address, RegPins, buf) != 0) return null;
+            if (!_read(RegPins, buf)) return null;
 
         var pins = new PinReading[6];
         for (int i = 0; i < 6; i++)
@@ -78,7 +106,7 @@ internal sealed class AsusPowerDetector
     {
         Span<byte> buf = stackalloc byte[16];
         lock (_bus)
-            if (_nvapi.I2CRead(_gpu, Port, Address, RegBoardTemps, buf) != 0) return null;
+            if (!_read(RegBoardTemps, buf)) return null;
 
         var temps = new BoardTemp[8];
         for (int i = 0; i < 8; i++)
