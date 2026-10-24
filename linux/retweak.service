@@ -1,0 +1,18 @@
+# ReTweak headless on Linux: your saved settings (fans, power limit, emergency cut) from boot.
+# Install: copy the linux-x64 build to /opt/retweak, then
+#   sudo cp retweak.service /etc/systemd/system/ && sudo systemctl enable --now retweak
+# Settings: /root/.local/share/ReTweak/settings.json (your Windows settings.json works as is).
+[Unit]
+Description=ReTweak GPU fan and power control
+After=systemd-modules-load.service
+
+[Service]
+User=root
+ExecStart=/opt/retweak/ReTweak.Cli --run
+# Runs however ReTweak ended (stopped, crashed, killed): a manual fan speed would otherwise outlive it.
+ExecStopPost=/opt/retweak/ReTweak.Cli --fan auto
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -9,6 +9,8 @@ no longer reports it on Blackwell, so it's read from the GPU's thermal registers
   (mapping the registers from user space as root).
 - Any user can read `/sys/kernel/retweak_hotspot/<pci address>/channels`, so ReTweak doesn't need root for the hotspot.
 
+License: this module is GPL-2.0 (as the kernel requires), unlike the rest of ReTweak (GPL-3.0).
+
 ## Install with DKMS (rebuilds itself after kernel updates)
 
 Arch (and Arch-based; use the headers package for your kernel, e.g. `linux-zen-headers`):
