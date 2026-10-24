@@ -232,9 +232,9 @@ public sealed partial class MainViewModel : Observable, IDisposable
         if (_fan is not null)
         {
             FanSpeedRange = $" · driver allows {_fan.Range.Min}-{_fan.Range.Max} %";
-            // A manual speed would outlive ReTweak, so hand the fans back however the process ends.
-            AppDomain.CurrentDomain.ProcessExit += (_, _) => _fan.Dispose();
-            AppDomain.CurrentDomain.UnhandledException += (_, _) => _fan.Dispose();
+            // A manual speed, or an emergency power cut, would outlive ReTweak: undo both however the process ends.
+            AppDomain.CurrentDomain.ProcessExit += (_, _) => _control.Dispose();
+            AppDomain.CurrentDomain.UnhandledException += (_, _) => _control.Dispose();
         }
 
         Apply(settings);

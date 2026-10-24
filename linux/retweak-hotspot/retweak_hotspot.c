@@ -13,8 +13,19 @@
 #include <linux/kobject.h>
 #include <linux/module.h>
 #include <linux/pci.h>
-#include <linux/slab.h>
+#include <linux/pm_runtime.h>
 #include <linux/sysfs.h>
+#include <linux/version.h>
+
+/* Takes a runtime-PM reference only if the GPU is awake: 1 = awake (put it back after), 0 = asleep, <0 = runtime PM off. */
+static int get_if_awake(struct device *dev)
+{
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 9, 0)
+	return pm_runtime_get_if_active(dev);
+#else
+	return pm_runtime_get_if_active(dev, true);
+#endif
+}
 
 #define CHANNEL_OFFSET 0xAD0A90
 #define CHANNEL_COUNT 6
@@ -45,16 +56,22 @@ static ssize_t channels_show(struct kobject *kobj, struct kobj_attribute *attr, 
 	struct gpu *g = gpu_of(kobj);
 	unsigned int off = CHANNEL_OFFSET & ~PAGE_MASK;
 	ssize_t len = 0;
-	int i;
+	int i, awake;
 
 	if (!g)
 		return -ENODEV;
-	/* A powered-down GPU answers all ones; don't wake it, just say it's not there right now. */
-	if (g->pdev->current_state != PCI_D0)
+	/*
+	 * Never wake a sleeping GPU (laptops) just for a temperature, and keep it from going to sleep mid-read:
+	 * the reference holds it awake. Runtime PM off (most desktops): the device stays in D0 unless suspended.
+	 */
+	awake = get_if_awake(&g->pdev->dev);
+	if (awake == 0 || (awake < 0 && g->pdev->current_state != PCI_D0))
 		return -EAGAIN;
 	for (i = 0; i < CHANNEL_COUNT; i++)
 		len += sysfs_emit_at(buf, len, "%08x%c", readl(g->page + off + 4 * i),
 				     i == CHANNEL_COUNT - 1 ? '\n' : ' ');
+	if (awake > 0)
+		pm_runtime_put(&g->pdev->dev);
 	return len;
 }
 
@@ -79,9 +96,16 @@ static void add_gpu(struct pci_dev *pdev)
 	struct gpu *g = &gpus[gpu_count];
 	resource_size_t start = pci_resource_start(pdev, 0);
 
+	bool supported;
+
 	if (!start || pci_resource_len(pdev, 0) < CHANNEL_OFFSET + 4 * CHANNEL_COUNT)
 		return;
-	if (pdev->current_state != PCI_D0 || !is_supported_chip(pdev))
+	/* Wake the GPU once, if it's asleep (laptops), to read its chip ID; it may sleep again right after. */
+	if (pm_runtime_resume_and_get(&pdev->dev) < 0)
+		return;
+	supported = pdev->current_state == PCI_D0 && is_supported_chip(pdev);
+	pm_runtime_put(&pdev->dev);
+	if (!supported)
 		return;
 	g->page = ioremap(start + (CHANNEL_OFFSET & PAGE_MASK), PAGE_SIZE);
 	if (!g->page)
