@@ -81,9 +81,10 @@ public sealed record AppSettings
     }
 
     /// <summary>
-    /// A copy with one setting changed, by its path as in settings.json ("PowerLimitPercent", "Fans.Mode"); names ignore
-    /// case, enums take their names, lists and objects take JSON. For the CLI's --set, where there's no Settings dialog.
-    /// Throws ArgumentException for an unknown name, a bad value, or a result the load checks would reset.
+    /// A copy with one setting changed, by its path as in settings.json ("PowerLimitPercent", "Fans.Mode",
+    /// "Fans.Activities.Gaming.TargetHotspotC"); names ignore case, enums take their names, lists and objects take JSON.
+    /// For the CLI's --set, where there's no Settings dialog. Throws ArgumentException for an unknown name, a bad value,
+    /// or a result the load checks would reset.
     /// </summary>
     public AppSettings With(string path, string value)
     {
@@ -93,11 +94,26 @@ public sealed record AppSettings
         string[] parts = path.Split('.');
         for (int i = 0; ; i++)
         {
-            var prop = type.GetProperty(parts[i], BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase)
-                       ?? throw new ArgumentException($"There's no setting '{parts[i]}' in {type.Name}. See --settings.");
-            if (i == parts.Length - 1) { parent[prop.Name] = ParseValue(prop.PropertyType, value); break; }
-            parent = parent[prop.Name] as JsonObject ?? throw new ArgumentException($"{prop.Name} has no settings inside it.");
-            type = prop.PropertyType;
+            string name;
+            Type next;
+            if (DictionaryValueType(type) is { } valueType)
+            {
+                // A keyed list (Fans.Activities): the next part is one of its keys, e.g. Gaming.
+                var keys = parent.Select(kv => kv.Key).ToList();
+                name = keys.FirstOrDefault(k => k.Equals(parts[i], StringComparison.OrdinalIgnoreCase))
+                       ?? throw new ArgumentException($"'{parts[i]}' isn't one of: {string.Join(", ", keys)}.");
+                next = valueType;
+            }
+            else
+            {
+                string where = i == 0 ? "the settings" : string.Join('.', parts[..i]);
+                var prop = type.GetProperty(parts[i], BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase)
+                           ?? throw new ArgumentException($"There's no setting '{parts[i]}' in {where}. See --settings.");
+                (name, next) = (prop.Name, prop.PropertyType);
+            }
+            if (i == parts.Length - 1) { parent[name] = ParseValue(next, value); break; }
+            parent = parent[name] as JsonObject ?? throw new ArgumentException($"{name} has no settings inside it.");
+            type = next;
         }
         AppSettings changed;
         try { changed = root.Deserialize<AppSettings>(Json)!; }
@@ -116,6 +132,11 @@ public sealed record AppSettings
         if (LoadProblems.Count > 0) throw new ArgumentException(string.Join("; ", LoadProblems));
         return result;
     }
+
+    private static Type? DictionaryValueType(Type t) =>
+        t.IsGenericType && t.GetGenericTypeDefinition() is var d
+        && (d == typeof(IReadOnlyDictionary<,>) || d == typeof(IDictionary<,>) || d == typeof(Dictionary<,>))
+            ? t.GetGenericArguments()[1] : null;
 
     private static JsonNode? ParseValue(Type type, string value)
     {

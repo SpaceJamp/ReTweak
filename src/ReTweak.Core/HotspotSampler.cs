@@ -130,7 +130,8 @@ internal sealed class HotspotSampler : IDisposable
             chips = _hotspot.ReadMemoryChips();
             if (chips is null) timer.Fail("no memory sensors");
         }
-        if (chips is null && _tick == 1)
+        // Through the module, a failed first read can just mean the GPU was asleep (laptops): keep asking.
+        if (chips is null && _tick == 1 && !_hotspot.FromModule)
         {
             _memoryUnsupported = true;
             Diag.Info(DiagCategory.Hotspot, "memory-chip temperatures not available on this GPU");

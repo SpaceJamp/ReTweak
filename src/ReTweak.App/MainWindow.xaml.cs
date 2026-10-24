@@ -33,9 +33,16 @@ public sealed partial class MainWindow : Window
         // Resize takes physical pixels; scale so the layout gets the same room at 125-200% display scaling.
         double scale = GetDpiForWindow(WinRT.Interop.WindowNative.GetWindowHandle(this)) / 96.0;
         // shortcut: picked once at startup; a window dragged to a monitor with another scale keeps this one (slightly soft there).
-        int titlePx = new[] { 18, 23, 27, 32, 36, 45 }.MinBy(px => Math.Abs(px - 18 * scale));
-        TitleIcon.Source = new BitmapImage(new Uri($"ms-appx:///Assets/title-{titlePx}.png"));
-        TitleIcon.Width = TitleIcon.Height = titlePx / scale;
+        // The sizes are whatever make-icons.ps1 drew (Assets/title-<px>.png), so the list lives in one place.
+        var titleSizes = Directory.GetFiles(System.IO.Path.Combine(AppContext.BaseDirectory, "Assets"), "title-*.png")
+            .Select(f => int.TryParse(System.IO.Path.GetFileNameWithoutExtension(f).AsSpan("title-".Length), out int px) ? px : 0)
+            .Where(px => px > 0).ToArray();
+        if (titleSizes.Length > 0)
+        {
+            int titlePx = titleSizes.MinBy(px => Math.Abs(px - 18 * scale));
+            TitleIcon.Source = new BitmapImage(new Uri($"ms-appx:///Assets/title-{titlePx}.png"));
+            TitleIcon.Width = TitleIcon.Height = titlePx / scale;
+        }
         // Never larger than the screen's usable area (a laptop at 125 % has less than 900 px of height).
         var work = DisplayArea.GetFromWindowId(AppWindow.Id, DisplayAreaFallback.Primary).WorkArea;
         AppWindow.Resize(new SizeInt32(Math.Min((int)(1180 * scale), work.Width), Math.Min((int)(900 * scale), work.Height)));

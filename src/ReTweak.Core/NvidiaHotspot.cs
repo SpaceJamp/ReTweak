@@ -61,7 +61,10 @@ public sealed class NvidiaHotspot : IDisposable
     private NvidiaHotspot(string moduleFile) => _moduleFile = moduleFile;
 
     /// <summary>How the registers are read, for the note under the value.</summary>
-    public string Source => _moduleFile is not null ? "retweak_hotspot module" : _bar0 is not null ? "BAR0, read-only" : "PawnIO";
+    public string Source => FromModule ? "retweak_hotspot module" : _bar0 is not null ? "BAR0, read-only" : "PawnIO";
+
+    /// <summary>Read through the Linux module, whose reads fail while a laptop GPU sleeps and work again once it wakes.</summary>
+    public bool FromModule => _moduleFile is not null;
 
     /// <summary>
     /// Linux: reads <paramref name="moduleFile"/> from the retweak_hotspot kernel module (linux/retweak-hotspot) if it's
