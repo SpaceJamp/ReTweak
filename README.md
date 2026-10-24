@@ -158,8 +158,9 @@ powershell -ExecutionPolicy Bypass -File tools/install.ps1
 ```
 
 This builds a self-contained Release (ReTweak carries its own .NET runtime) and installs it to
-`C:\Program Files\ReTweak`, after one UAC prompt. If Start with Windows is on, the installed copy moves the
-logon task to itself. Run it again to update. Settings and learned data stay in `%LocalAppData%\ReTweak`.
+`C:\Program Files\ReTweak`, after one UAC prompt, and adds ReTweak to the Start menu (for all users; opening it while
+ReTweak runs in the tray brings its window up). If Start with Windows is on, the installed copy moves the logon task to
+itself. Run it again to update. Settings and learned data stay in `%LocalAppData%\ReTweak`.
 
 ## Build and run
 
