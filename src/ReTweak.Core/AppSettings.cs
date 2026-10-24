@@ -1,4 +1,7 @@
+using System.Reflection;
 using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 
 namespace ReTweak.Core;
 
@@ -76,6 +79,59 @@ public sealed record AppSettings
         LoadProblems = problems;
         return s with { Fans = fans ?? new(), Alerts = alerts ?? new(), LogFolder = logFolder, PowerLimitPercent = powerLimit };
     }
+
+    /// <summary>
+    /// A copy with one setting changed, by its path as in settings.json ("PowerLimitPercent", "Fans.Mode"); names ignore
+    /// case, enums take their names, lists and objects take JSON. For the CLI's --set, where there's no Settings dialog.
+    /// Throws ArgumentException for an unknown name, a bad value, or a result the load checks would reset.
+    /// </summary>
+    public AppSettings With(string path, string value)
+    {
+        var root = JsonSerializer.SerializeToNode(this, Json)!.AsObject();
+        JsonObject parent = root;
+        Type type = typeof(AppSettings);
+        string[] parts = path.Split('.');
+        for (int i = 0; ; i++)
+        {
+            var prop = type.GetProperty(parts[i], BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase)
+                       ?? throw new ArgumentException($"There's no setting '{parts[i]}' in {type.Name}. See --settings.");
+            if (i == parts.Length - 1) { parent[prop.Name] = ParseValue(prop.PropertyType, value); break; }
+            parent = parent[prop.Name] as JsonObject ?? throw new ArgumentException($"{prop.Name} has no settings inside it.");
+            type = prop.PropertyType;
+        }
+        AppSettings changed;
+        try { changed = root.Deserialize<AppSettings>(Json)!; }
+        catch (JsonException) { throw new ArgumentException($"'{value}' isn't a valid value for {path}."); }
+        // Refuse rather than let Checked quietly reset a whole section to defaults; say why in the dialog's words.
+        string? problem;
+        try
+        {
+            problem = changed.PowerLimitPercent is < PowerLimitMinPercent or > PowerLimitMaxPercent
+                ? $"Power limit must be {PowerLimitMinPercent}-{PowerLimitMaxPercent} %."
+                : changed.Fans?.Validate() ?? (changed.Alerts is null ? null : Validate(changed.Alerts));
+        }
+        catch (Exception ex) { problem = ex.Message; }
+        if (problem is not null) throw new ArgumentException(problem);
+        var result = Checked(changed); // still catches what the above can't word (a section set to null)
+        if (LoadProblems.Count > 0) throw new ArgumentException(string.Join("; ", LoadProblems));
+        return result;
+    }
+
+    private static JsonNode? ParseValue(Type type, string value)
+    {
+        var t = Nullable.GetUnderlyingType(type) ?? type;
+        if (t.IsEnum)
+            return Enum.TryParse(t, value, ignoreCase: true, out var e) && Enum.IsDefined(t, e!)
+                ? JsonValue.Create(Convert.ToInt32(e))
+                : throw new ArgumentException($"'{value}' isn't one of: {string.Join(", ", Enum.GetNames(t))}.");
+        if (t == typeof(string)) return JsonValue.Create(value);
+        try { return JsonNode.Parse(value); }
+        catch (JsonException) { throw new ArgumentException($"'{value}' isn't a valid {t.Name}."); }
+    }
+
+    /// <summary>The settings as indented JSON with enum names, for people to read (the file stores enums as numbers).</summary>
+    public string Describe() =>
+        JsonSerializer.Serialize(this, new JsonSerializerOptions(Json) { Converters = { new JsonStringEnumConverter() } });
 
     public void Save()
     {
