@@ -187,7 +187,8 @@
 
                         <StackPanel Spacing="10" MinWidth="320">
                             <TextBlock Text="Fan control" Style="{StaticResource BodyStrongTextBlockStyle}" />
-                            <RadioButtons SelectedIndex="{x:Bind ViewModel.FanModeIndex, Mode=TwoWay}" MaxColumns="4">
+                            <RadioButtons SelectedIndex="{x:Bind ViewModel.FanModeIndex, Mode=TwoWay}" MaxColumns="4"
+                                          AutomationProperties.Name="Fan control" IsEnabled="{x:Bind ViewModel.FanControlsEnabled}">
                                 <x:String>Auto</x:String>
                                 <x:String>Driver</x:String>
                                 <x:String>Fixed</x:String>
@@ -200,17 +201,19 @@
                             <Button Content="Restart as administrator" Click="RestartElevated_Click"
                                     Visibility="{x:Bind ViewModel.FanNeedsAdmin, Mode=OneWay}"
                                     Style="{StaticResource AccentButtonStyle}" />
-                            <StackPanel Orientation="Horizontal" Spacing="6">
+                            <StackPanel Orientation="Horizontal" Spacing="6" IsHitTestVisible="{x:Bind ViewModel.FanControlsEnabled}"
+                                        Opacity="{x:Bind local:MainWindow.EnabledOpacity(ViewModel.FanControlsEnabled)}">
                                 <TextBlock Text="Curve presets" VerticalAlignment="Center" Style="{StaticResource CaptionTextBlockStyle}"
                                            Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                                 <Button Content="Quiet" Tag="Quiet" Click="FanPreset_Click" Padding="10,3" />
                                 <Button Content="Balanced" Tag="Balanced" Click="FanPreset_Click" Padding="10,3" />
                                 <Button Content="Performance" Tag="Performance" Click="FanPreset_Click" Padding="10,3" />
                             </StackPanel>
-                            <TextBlock Text="{x:Bind ViewModel.FanInputs, Mode=OneWay}" TextWrapping="Wrap" MaxWidth="320"
+                            <!-- Left: a MaxWidth text in a wider panel is centered otherwise. -->
+                            <TextBlock Text="{x:Bind ViewModel.FanInputs, Mode=OneWay}" TextWrapping="Wrap" MaxWidth="320" HorizontalAlignment="Left"
                                        Style="{StaticResource CaptionTextBlockStyle}" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
                             <TextBlock Style="{StaticResource CaptionTextBlockStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                       TextWrapping="Wrap" MaxWidth="320"
+                                       TextWrapping="Wrap" MaxWidth="320" HorizontalAlignment="Left"
                                        Text="{x:Bind ViewModel.FanHelp, Mode=OneWay}" />
                         </StackPanel>
 
@@ -219,7 +222,11 @@
                                 <Run Text="{x:Bind ViewModel.FanChartLabel, Mode=OneWay}" />
                                 <Run Text="{x:Bind ViewModel.FanSpeedRange}" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
                             </TextBlock>
+                            <!-- What Auto / the driver does, above the plot: inside it, it was squeezed into the gap left of the target. -->
+                            <TextBlock x:Name="FanChartCaption" TextWrapping="Wrap" Style="{StaticResource CaptionTextBlockStyle}"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" Visibility="Collapsed" />
                             <Canvas x:Name="FanChart" Height="230" SizeChanged="Chart_SizeChanged"
+                                    IsHitTestVisible="{x:Bind ViewModel.FanControlsEnabled}"
                                     Background="{ThemeResource ControlFillColorTransparentBrush}"
                                     PointerPressed="FanChart_PointerPressed" PointerMoved="FanChart_PointerMoved"
                                     PointerReleased="FanChart_PointerReleased" PointerCaptureLost="FanChart_PointerCaptureLost" />
@@ -324,7 +331,7 @@
                 <InfoBar IsOpen="True" IsClosable="False" Severity="Informational"
                          Visibility="{x:Bind local:MainWindow.Not(ViewModel.HasConnector)}"
                          Title="No per-pin connector sensor"
-                         Message="This card doesn't have the ASUS Power Detector chip, so only total board power is available." />
+                         Message="{x:Bind ViewModel.NoConnectorMessage}" />
             </StackPanel>
         </ScrollViewer>
     </Grid>

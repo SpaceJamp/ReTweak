@@ -31,7 +31,15 @@ public sealed partial class MainWindow : Window
         AppWindow.SetIcon(System.IO.Path.Combine(AppContext.BaseDirectory, "Assets", "ReTweak.ico")); // title bar, taskbar, Alt+Tab
         // Resize takes physical pixels; scale so the layout gets the same room at 125-200% display scaling.
         double scale = GetDpiForWindow(WinRT.Interop.WindowNative.GetWindowHandle(this)) / 96.0;
-        AppWindow.Resize(new SizeInt32((int)(1180 * scale), (int)(900 * scale)));
+        // Never larger than the screen's usable area (a laptop at 125 % has less than 900 px of height).
+        var work = DisplayArea.GetFromWindowId(AppWindow.Id, DisplayAreaFallback.Primary).WorkArea;
+        AppWindow.Resize(new SizeInt32(Math.Min((int)(1180 * scale), work.Width), Math.Min((int)(900 * scale), work.Height)));
+        // Narrower than this, the five tile columns cut values like "15001 MHz" off.
+        if (AppWindow.Presenter is OverlappedPresenter presenter)
+        {
+            presenter.PreferredMinimumWidth = Math.Min((int)(960 * scale), work.Width);
+            presenter.PreferredMinimumHeight = Math.Min((int)(560 * scale), work.Height);
+        }
 
         ViewModel.HistoryChanged += RedrawCharts;
         ViewModel.FanChanged += DrawFanCurve;
@@ -50,6 +58,8 @@ public sealed partial class MainWindow : Window
     }
 
     public static Visibility Not(bool value) => value ? Visibility.Collapsed : Visibility.Visible;
+    /// <summary>Dimmed like a disabled control (for panels that have no IsEnabled of their own).</summary>
+    public static double EnabledOpacity(bool enabled) => enabled ? 1 : 0.4;
 
     /// <summary>"v0.9.0 · build 36" in the title bar; the tooltip has the commit.</summary>
     public static string VersionText { get; } = $"v{BuildInfo.Version} · build {BuildInfo.Build}{(BuildInfo.Dirty ? "+" : "")}";
@@ -290,7 +300,8 @@ public sealed partial class MainWindow : Window
         double? failsafeC = o.Source == FanSource.Core ? o.FailsafeTempC
                           : o.Source == FanSource.Hotspot ? o.FailsafeHotspotC
                           : o.Source == FanSource.Memory ? o.FailsafeMemoryC : null;
-        if (o.Mode != FanMode.Driver && failsafeC is double fs)
+        // Only Curve and Fixed plot against that input; Auto's axis is its own, with the ceiling as its red line.
+        if (o.Mode is FanMode.Curve or FanMode.Fixed && failsafeC is double fs)
             canvas.Children.Add(new Line
             {
                 X1 = X(fs), X2 = X(fs), Y1 = top, Y2 = bottom,
@@ -308,9 +319,10 @@ public sealed partial class MainWindow : Window
             canvas.Children.Add(zone);
             var t = new TextBlock { Text = "0 RPM", FontSize = 12, Foreground = label };
             Canvas.SetLeft(t, left + 4);
-            Canvas.SetTop(t, bottom - 18); // bottom corner: the mode description sits in the top-left
+            Canvas.SetTop(t, bottom - 18);
             canvas.Children.Add(t);
         }
+        string caption = "";
 
         if (o.Mode == FanMode.Smart)
         {
@@ -339,17 +351,10 @@ public sealed partial class MainWindow : Window
                 X1 = X(target), X2 = X(target), Y1 = top, Y2 = bottom,
                 Stroke = Theme.Info, StrokeThickness = 2, StrokeDashArray = [4, 3],
             });
-            var t = new TextBlock
-            {
-                Text = (activity == ActivityKind.Unknown ? "" : $"{activity}: ") +
-                       $"Auto holds the {(o.SmartInput == SmartInput.Average ? "core/hotspot average" : "hotspot")} at {target:F0} °C ({priority})" +
-                       (o.CeilingC > 0 ? $" and keeps the hotspot under {o.CeilingC:F0} °C (red line)." : ".") +
-                       " Every sensor votes; the one closest to its limit sets the speed.",
-                FontSize = 12, Foreground = label, TextWrapping = TextWrapping.Wrap, Width = Math.Max(0, X(target) - left - 12),
-            };
-            Canvas.SetLeft(t, left + 4);
-            Canvas.SetTop(t, top + 2);
-            canvas.Children.Add(t);
+            caption = (activity == ActivityKind.Unknown ? "" : $"{activity}: ") +
+                      $"Auto holds the {(o.SmartInput == SmartInput.Average ? "core/hotspot average" : "hotspot")} at {target:F0} °C ({priority}, blue line)" +
+                      (o.CeilingC > 0 ? $" and keeps the hotspot under {o.CeilingC:F0} °C (red line)." : ".") +
+                      " Every sensor votes; the one closest to its limit sets the speed.";
         }
         else if (o.Mode != FanMode.Driver)
         {
@@ -363,18 +368,11 @@ public sealed partial class MainWindow : Window
             canvas.Children.Add(line);
         }
         else
-        {
-            var t = new TextBlock
-            {
-                Text = o.AutoAssist
-                    ? $"Driver's curve. Safety net steps in at hotspot {o.AssistHotspotC:F0} °C, memory {o.AssistMemoryC:F0} °C, or hotspot {o.AssistGapC:F0} °C above core."
-                    : "Driver's curve. ReTweak doesn't touch the fans.",
-                FontSize = 12, Foreground = label, TextWrapping = TextWrapping.Wrap, Width = Math.Max(0, w - 8),
-            };
-            Canvas.SetLeft(t, left + 4);
-            Canvas.SetTop(t, top + 2);
-            canvas.Children.Add(t);
-        }
+            caption = o.AutoAssist
+                ? $"Driver's curve. Safety net steps in at hotspot {o.AssistHotspotC:F0} °C, memory {o.AssistMemoryC:F0} °C, or hotspot {o.AssistGapC:F0} °C above core."
+                : "Driver's curve. ReTweak doesn't touch the fans.";
+        FanChartCaption.Text = caption;
+        FanChartCaption.Visibility = caption.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
 
         if (o.Mode == FanMode.Curve)
             for (int i = 0; i < curve.Count; i++)
