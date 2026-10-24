@@ -1094,6 +1094,11 @@ static class Simulate
                 bool same = got is { Length: 6 } && got.Zip(temps).All(p => p.First == p.Second);
                 Check("Linux hotspot: reads the retweak_hotspot module's file first", same && reader!.Source == "retweak_hotspot module",
                       got is null ? why : $"{reader!.Source}: {string.Join(", ", got)}");
+                bool noFileYet = reader!.ReadMemoryChips() is null; // an older module without "memory"
+                File.WriteAllText(Path.Combine(dir, "memory"), "44 46 45 0 200\n"); // the module's format; 0 and 200 aren't plausible
+                var chips = reader.ReadMemoryChips();
+                Check("Linux memory chips: read from the module's memory file", noFileYet && chips is [44, 46, 45],
+                      chips is null ? "none" : string.Join(", ", chips));
             }
 
             // The connector chip's bus: this GPU's i2c-N folders, matched by the nvidia driver's adapter name and port.
