@@ -7,7 +7,7 @@ public sealed record AppSettings
 {
     public static string Folder { get; } =
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ReTweak");
-    private static string FilePath => Path.Combine(Folder, "settings.json");
+    public static string FilePath =>Path.Combine(Folder, "settings.json");
     private static readonly JsonSerializerOptions Json = new() { WriteIndented = true };
 
     public AlertOptions Alerts { get; init; } = new();

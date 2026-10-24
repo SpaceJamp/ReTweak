@@ -1,0 +1,2 @@
+# Built and sourced on Linux: make and dkms break on CRLF, even when copied from a Windows checkout.
+linux/** text eol=lf

@@ -70,14 +70,12 @@ public sealed class NvidiaHotspot : IDisposable
     /// </summary>
     public static NvidiaHotspot? TryCreateLinux(string pciDeviceFolder, string moduleFile, out HotspotAvailability availability, out string reason)
     {
+        // The module only makes the file for a supported GPU. A failed read just means it's asleep right now (laptops);
+        // the sampler skips those.
         if (File.Exists(moduleFile))
         {
-            var fromModule = new NvidiaHotspot(moduleFile);
-            if (fromModule.ReadChannels() is not null)
-            {
-                (availability, reason) = (HotspotAvailability.Available, "");
-                return fromModule;
-            }
+            (availability, reason) = (HotspotAvailability.Available, "");
+            return new NvidiaHotspot(moduleFile);
         }
         string vendor;
         try { vendor = File.ReadAllText(Path.Combine(pciDeviceFolder, "vendor")).Trim(); }

@@ -49,6 +49,8 @@ if (args.Contains("--hold-test"))
 
 if (args.Contains("--security-check"))
 {
+    // It audits Windows things (registry, services, ACLs); Registry throws PlatformNotSupportedException elsewhere.
+    if (!OperatingSystem.IsWindows()) { Console.WriteLine("--security-check is Windows-only."); return; }
     string data = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ReTweak");
     var findings = SecurityCheck.Run(dataFolder: data,
         diagnosticsFolder: Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "ReTweak", "diagnostics"));
@@ -164,6 +166,9 @@ static int RunFan(GpuMonitor monitor, string mode, string[] args, bool saved = f
     if (saved)
     {
         settings = AppSettings.Load();
+        // Under sudo this is root's home (/root/.local/share/...), not yours: say which file, so defaults aren't a surprise.
+        Console.WriteLine(File.Exists(AppSettings.FilePath) ? $"Settings: {AppSettings.FilePath}"
+                                                            : $"Settings: {AppSettings.FilePath} not found, using defaults");
         foreach (var problem in AppSettings.LoadProblems) Console.WriteLine($"settings: {problem}");
     }
     else if (mode.Equals("curve", StringComparison.OrdinalIgnoreCase)) settings = new() { Fans = new() { Mode = FanMode.Curve } };
