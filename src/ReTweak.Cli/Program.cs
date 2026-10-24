@@ -20,11 +20,13 @@ using ReTweak.Core;
 // --debug: full diagnostic log (JSON lines) to %LocalAppData%\ReTweak\diagnostics, like the app's --debug.
 if (args.Contains("--debug"))
 {
-    // Same rule as the app: elevated, only into the admin-only %ProgramData% folder.
-    string diagFolder = TrustedPaths.IsElevated
+    // Same rule as the app: elevated, only into the admin-only %ProgramData% folder. Root on Linux: /var/log, root-only already.
+    bool windowsAdmin = TrustedPaths.IsElevated && OperatingSystem.IsWindows();
+    string diagFolder = windowsAdmin
         ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "ReTweak", "diagnostics")
+        : TrustedPaths.IsElevated ? "/var/log/retweak"
         : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ReTweak", "diagnostics");
-    if (TrustedPaths.IsElevated && !TrustedPaths.EnsureAdminOnlyFolder(diagFolder))
+    if (windowsAdmin && !TrustedPaths.EnsureAdminOnlyFolder(diagFolder))
     {
         Console.WriteLine($"Couldn't secure {diagFolder}; running without the diagnostic log.");
         diagFolder = "";
@@ -201,7 +203,7 @@ static int RunFan(GpuMonitor monitor, string mode, string[] args, bool saved = f
     } while (!done.Wait(1000) && (duration == Timeout.InfiniteTimeSpan || started.Elapsed < duration));
 
     control.Dispose();
-    Console.WriteLine("Fans handed back to the driver.");
+    if (GpuControl.CanWrite) Console.WriteLine("Fans handed back to the driver.");
     return result;
 }
 

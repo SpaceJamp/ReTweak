@@ -65,7 +65,8 @@ public sealed class GpuMonitor : IDisposable
             AsusPowerDetector? detector = null;
             NvidiaThermal? thermal = null;
             HotspotSampler? hotspot = null;
-            string hotspotNote = "Not reported by this card";
+            // Older cards report it through NVAPI, which is Windows-only.
+            string hotspotNote = OperatingSystem.IsWindows() ? "Not reported by this card" : "Not read on Linux for this card";
             var hotspotState = HotspotAvailability.NotApplicable;
             uint? arch = Nvml.DeviceGetArchitecture(handle, out uint a) == Nvml.Success ? a : null;
             if (nvapi is not null && nvapiByBus.TryGetValue(pci.Bus, out var nvHandle))

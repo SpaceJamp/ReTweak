@@ -130,7 +130,8 @@ internal static partial class Nvml
     {
         Success => "ok",
         NotSupported => "not supported on this card",
-        NoPermission => "needs administrator rights",
+        // FanController looks for "administrator" in this text to tell a permission problem.
+        NoPermission => OperatingSystem.IsWindows() ? "needs administrator rights" : "needs root (administrator rights)",
         _ => $"NVML error {rc}",
     };
 

@@ -64,6 +64,20 @@ temperature registers, but Windows only lets kernel drivers read those, so every
 
 How the register was found: [docs/power-detector.md](docs/power-detector.md#hotspot-on-rtx-50-2026-10-19).
 
+## Linux
+
+The CLI runs on Linux (`dotnet publish src/ReTweak.Cli -c Release -r linux-x64 --self-contained`), through NVML:
+monitoring, `--fans`, `--fan`, and `--run`, which runs the app's control loop headless with your saved settings
+(fans, power limit, emergency cut). Writing needs root. Not on Linux yet: the app window, the ASUS connector
+pins (NVAPI) and the RTX 30/40 hotspot.
+
+- **Start at boot:** [linux/retweak.service](linux/retweak.service) runs `--run` as a systemd service and hands the
+  fans back to the driver however it stops. Settings live in `/root/.local/share/ReTweak/settings.json` (a Windows
+  `settings.json` works as is).
+- **RTX 50 hotspot:** install the small read-only kernel module in [linux/retweak-hotspot](linux/retweak-hotspot)
+  (DKMS, Arch and Fedora steps included). Without it, ReTweak as root tries to map the registers itself, which
+  most distro kernels block.
+
 ## Diagnostic log
 
 For tracking down problems, Settings → Diagnostics turns on a detailed log (or start the app or

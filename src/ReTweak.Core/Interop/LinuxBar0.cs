@@ -12,7 +12,7 @@ namespace ReTweak.Core.Interop;
 internal sealed unsafe partial class LinuxBar0 : IDisposable
 {
     private const int ProtRead = 1, MapShared = 1, ORdOnly = 0;
-    private const int EPerm = 1, ENoEnt = 2, EAcces = 13;
+    private const int EPerm = 1, ENoEnt = 2, EAcces = 13, EInval = 22;
     private const long PageMask = 0xFFF;
 
     private readonly nint _map;
@@ -44,7 +44,8 @@ internal sealed unsafe partial class LinuxBar0 : IDisposable
         close(fd); // the mapping stays valid without the descriptor
         if (map == -1)
         {
-            (failure, error) = mapErrno is EPerm or EAcces
+            // Lockdown answers EPERM; strict devmem (memory the nvidia driver claimed) answers EINVAL from pci-sysfs.
+            (failure, error) = mapErrno is EPerm or EAcces or EInval
                 ? (HotspotAvailability.Failed, LockedDown()
                     ? "Secure Boot lockdown blocks reading the GPU's registers from user space"
                     : "the kernel blocks reading the GPU's registers (boot with iomem=relaxed to allow it)")

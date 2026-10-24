@@ -105,7 +105,7 @@ internal sealed class HotspotSampler : IDisposable
     private void ReadOnce()
     {
         double?[]? channels;
-        using (var timer = Diag.Time("pawnio.thermal_registers"))
+        using (var timer = Diag.Time("hotspot.thermal_registers"))
         {
             channels = _hotspot.Read();
             if (channels is null) timer.Fail("ioctl failed");
@@ -125,7 +125,7 @@ internal sealed class HotspotSampler : IDisposable
         // Memory chips change slowly: once a second is plenty. Stop asking if the module says no.
         if (_memoryUnsupported || _tick++ % 10 != 0) return;
         int[]? chips;
-        using (var timer = Diag.Time("pawnio.memory_temperatures"))
+        using (var timer = Diag.Time("hotspot.memory_temperatures"))
         {
             chips = _hotspot.ReadMemoryChips();
             if (chips is null) timer.Fail("no memory sensors");

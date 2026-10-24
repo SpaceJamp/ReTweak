@@ -9,6 +9,7 @@ static class HoldTest
 {
     public static int Run()
     {
+        if (!OperatingSystem.IsWindows()) { Console.WriteLine("--hold-test is Windows-only (the hold uses Windows file handles)."); return 9; }
         if (!TrustedPaths.IsElevated) { Console.WriteLine("Run as administrator: the hold only applies to an elevated process."); return 9; }
         string root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ReTweakHoldTest");
         int fails = 0;

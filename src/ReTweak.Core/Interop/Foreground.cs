@@ -20,6 +20,8 @@ public static unsafe partial class Foreground
 
     public static ForegroundApp Read()
     {
+        // shortcut: Windows only (X11/Wayland have no common way to ask); Auto tells games apart by load alone on Linux.
+        if (!OperatingSystem.IsWindows()) return ForegroundApp.None;
         try
         {
             nint hwnd = GetForegroundWindow();
