@@ -74,16 +74,15 @@ hotspot.
 - **Connector pins (ASUS Power Detector+):** read as root through the nvidia driver's I2C bus. Load i2c-dev once and at
   every boot: `sudo modprobe i2c-dev` and `echo i2c-dev | sudo tee /etc/modules-load.d/i2c-dev.conf`. The snapshot
   says where the chip was found, or why not.
-
 - **Start at boot:** [linux/retweak.service](linux/retweak.service) runs `--run` as a systemd service and hands the
   fans back to the driver however it stops. Settings live in `/root/.local/share/ReTweak/settings.json` (a Windows
   `settings.json` works as is); `sudo ReTweak.Cli --settings` shows them and `--set` changes one, checked like the
   Settings dialog: `sudo ReTweak.Cli --set PowerLimitPercent 85`, `--set Fans.Mode Smart`.
 - **Diagnostic log:** `--debug`, or `--set DiagnosticsLevel Info` (or `Debug`, `Trace`) for `--run`. As root it goes
   to `/var/log/retweak`. The diagnostics bundle is app-only.
-- **RTX 50 hotspot:** install the small read-only kernel module in [linux/retweak-hotspot](linux/retweak-hotspot)
-  (DKMS, Arch and Fedora steps included). Without it, ReTweak as root tries to map the registers itself, which
-  most distro kernels block.
+- **RTX 50 hotspot and memory-chip temperatures:** install the small read-only kernel module in
+  [linux/retweak-hotspot](linux/retweak-hotspot) (DKMS, Arch and Fedora steps included); Auto then steers by both, as on
+  Windows. Without it, ReTweak as root tries to map the hotspot registers itself, which most distro kernels block.
 
 ## Diagnostic log
 
