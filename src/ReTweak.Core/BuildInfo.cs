@@ -10,14 +10,14 @@ namespace ReTweak.Core;
 
 /// <summary>
 /// Which build this is, from the informational version Directory.Build.props stamps in at build time:
-/// "0.9.0+36.0855fce" (version + commit count + short hash), with ".dirty" for uncommitted changes.
+/// "&lt;version&gt;+&lt;commits&gt;.&lt;hash&gt;" (version + commit count + short hash), with ".dirty" for uncommitted changes.
 /// </summary>
 public static class BuildInfo
 {
     private static readonly string Raw =
         typeof(BuildInfo).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "0.0.0";
 
-    /// <summary>"0.9.0".</summary>
+    /// <summary>VersionPrefix from Directory.Build.props, e.g. "1.2.3".</summary>
     public static string Version { get; } = Raw.Split('+')[0];
 
     /// <summary>Commits in the history at build time; 0 when built without git.</summary>
@@ -29,9 +29,9 @@ public static class BuildInfo
     /// <summary>Built with uncommitted changes.</summary>
     public static bool Dirty { get; } = Raw.EndsWith(".dirty", StringComparison.Ordinal);
 
-    /// <summary>"0.9.0 (build 36, 0855fce)", with ", modified" for a dirty build.</summary>
+    /// <summary>"&lt;version&gt; (build &lt;commits&gt;, &lt;hash&gt;)", with ", modified" for a dirty build.</summary>
     public static string Display { get; } = $"{Version} (build {Build}, {Commit}{(Dirty ? ", modified" : "")})";
 
-    /// <summary>The full string, for logs: "0.9.0+36.0855fce".</summary>
+    /// <summary>The full string, for logs: "&lt;version&gt;+&lt;commits&gt;.&lt;hash&gt;".</summary>
     public static string Full => Raw;
 }
