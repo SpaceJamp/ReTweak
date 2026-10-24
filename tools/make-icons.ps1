@@ -3,8 +3,8 @@
 #   pwsh tools/make-icons.ps1
 #
 # Writes to src/ReTweak.App/Assets:
-#   ReTweak.ico          app icon (16-256 px), "Hot R": a white R on a near-black rounded square whose leg is a red
-#                        thermometer (a nod to ROG's red-and-black gamer look, not a copy of its logo)
+#   ReTweak.ico          app icon (16-256 px), "Hot R": a white R on a near-black rounded square whose leg is a
+#                        thermometer heating from amber to red (a nod to ROG's red-and-black gamer look, not a copy of its logo)
 #   tray.ico             tray icon, normal state (16/20/24/32 px)
 #   tray-warning.ico     tray icon with an amber status dot
 #   tray-critical.ico    tray icon with a red status dot
@@ -81,10 +81,13 @@ public static class IconMaker
             g.DrawPath(white, r);
         }
 
-        // The leg is a thermometer: a red stem into a bulb.
+        // The leg is a thermometer: a stem heating from amber to red, into a red bulb.
         var red = Color.FromArgb(0xE5, 0x17, 0x2F);
-        using (var leg = new Pen(red, Math.Max(0.077f * s, size <= 24 ? 2.2f : 0f)) { StartCap = LineCap.Flat, EndCap = LineCap.Round })
-            g.DrawLine(leg, P(0.48f, 0.555f), P(0.68f, 0.755f));
+        var legTop = P(0.48f, 0.555f); var legEnd = P(0.68f, 0.755f);
+        // The gradient ends at the bulb's centre: GDI+ repeats it past its end, which made the round cap flash amber.
+        using (var heat = new LinearGradientBrush(legTop, P(0.74f, 0.815f), Color.FromArgb(0xFF, 0xB0, 0x20), red))
+        using (var leg = new Pen(heat, Math.Max(0.077f * s, size <= 24 ? 2.2f : 0f)) { StartCap = LineCap.Flat, EndCap = LineCap.Round })
+            g.DrawLine(leg, legTop, legEnd);
         float bulb = Math.Max(0.085f * s, size <= 24 ? 2.6f : 0f);
         using (var bulbFill = new SolidBrush(red))
             g.FillEllipse(bulbFill, 0.74f * s - bulb, 0.815f * s - bulb, 2 * bulb, 2 * bulb);
