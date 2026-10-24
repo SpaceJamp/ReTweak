@@ -21,7 +21,9 @@ using ReTweak.Core;
 // ReTweak.Cli --hold-test        check the elevated folder holds against renames and junctions (admin)
 
 // --debug: full diagnostic log (JSON lines) to %LocalAppData%\ReTweak\diagnostics, like the app's --debug.
-if (args.Contains("--debug"))
+// --run also follows the saved DiagnosticsLevel, like the app (Settings -> Diagnostics, or --set DiagnosticsLevel Info).
+var diagLevel = args.Contains("--debug") ? DiagLevel.Trace : args.Contains("--run") ? AppSettings.Load().DiagnosticsLevel : DiagLevel.Off;
+if (diagLevel != DiagLevel.Off)
 {
     // Same rule as the app: elevated, only into the admin-only %ProgramData% folder. Root on Linux: /var/log, root-only already.
     bool windowsAdmin = TrustedPaths.IsElevated && OperatingSystem.IsWindows();
@@ -34,7 +36,7 @@ if (args.Contains("--debug"))
         Console.WriteLine($"Couldn't secure {diagFolder}; running without the diagnostic log.");
         diagFolder = "";
     }
-    if (diagFolder.Length > 0) Diag.Configure(DiagLevel.Trace, diagFolder);
+    if (diagFolder.Length > 0) Diag.Configure(diagLevel, diagFolder);
     Diag.Info(DiagCategory.App, "cli started", new { args, admin = Environment.IsPrivilegedProcess });
     AppDomain.CurrentDomain.ProcessExit += (_, _) => Diag.Shutdown();
     if (diagFolder.Length > 0) Console.WriteLine($"Diagnostic log: {diagFolder}");

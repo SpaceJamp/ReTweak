@@ -73,7 +73,10 @@ pins (NVAPI) and the RTX 30/40 hotspot.
 
 - **Start at boot:** [linux/retweak.service](linux/retweak.service) runs `--run` as a systemd service and hands the
   fans back to the driver however it stops. Settings live in `/root/.local/share/ReTweak/settings.json` (a Windows
-  `settings.json` works as is).
+  `settings.json` works as is); `sudo ReTweak.Cli --settings` shows them and `--set` changes one, checked like the
+  Settings dialog: `sudo ReTweak.Cli --set PowerLimitPercent 85`, `--set Fans.Mode Smart`.
+- **Diagnostic log:** `--debug`, or `--set DiagnosticsLevel Info` (or `Debug`, `Trace`) for `--run`. As root it goes
+  to `/var/log/retweak`. The diagnostics bundle is app-only.
 - **RTX 50 hotspot:** install the small read-only kernel module in [linux/retweak-hotspot](linux/retweak-hotspot)
   (DKMS, Arch and Fedora steps included). Without it, ReTweak as root tries to map the registers itself, which
   most distro kernels block.
